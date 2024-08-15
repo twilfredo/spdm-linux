@@ -2037,4 +2037,10 @@ struct nvme_completion {
 #define NVME_MINOR(ver)		(((ver) >> 8) & 0xff)
 #define NVME_TERTIARY(ver)	((ver) & 0xff)
 
+/*
+ * Security Protocols:
+ * NVMe 2.0 specification refers to SCSI Primary Commands 5 (SPC5)
+ * for security protocol definitions.
+ */
+#define NVME_SECURITY_DMTF_SPDM		0xE8
 #endif /* _LINUX_NVME_H */
