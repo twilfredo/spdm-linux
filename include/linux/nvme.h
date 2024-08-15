@@ -2180,4 +2180,10 @@ enum nvme_pr_change_ptpl {
 
 #define NVME_PR_IGNORE_KEY (1 << 3)
 
+/*
+ * Security Protocols:
+ * NVMe 2.0 specification refers to SCSI Primary Commands 5 (SPC5)
+ * for security protocol definitions.
+ */
+#define NVME_SECURITY_DMTF_SPDM		0xE8
 #endif /* _LINUX_NVME_H */

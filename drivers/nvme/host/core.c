@@ -2350,7 +2350,6 @@ static int nvme_get_unique_id(struct gendisk *disk, u8 id[16],
 	return nvme_ns_get_unique_id(disk->private_data, id, type);
 }
 
-#ifdef CONFIG_BLK_SED_OPAL
 static int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t len,
 		bool send)
 {
@@ -2369,6 +2368,7 @@ static int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t l
 			NVME_QID_ANY, NVME_SUBMIT_AT_HEAD);
 }
 
+#ifdef CONFIG_BLK_SED_OPAL
 static void nvme_configure_opal(struct nvme_ctrl *ctrl, bool was_suspended)
 {
 	if (ctrl->oacs & NVME_CTRL_OACS_SEC_SUPP) {
@@ -3269,6 +3269,60 @@ static int nvme_check_ctrl_fabric_info(struct nvme_ctrl *ctrl, struct nvme_id_ct
 	return 0;
 }
 
+/*
+ * Discover supported (if any) security protocols by the controller.
+ * Returns 0 on success.  If the result is negative, it's a Linux error code;
+ * if the result is positive, it's an NVM Express status code
+ */
+static void nvme_security_discover(struct nvme_ctrl *ctrl)
+{
+	int rc;
+	uint16_t spsp = 0;
+	uint8_t secp = 0;
+	uint16_t resp_size = 512;
+	uint8_t *resp;
+	uint16_t protocol_list_length = 0;
+	uint16_t protocol_list_index = 0;
+
+	resp = kzalloc(resp_size, GFP_KERNEL);
+	if (!resp)
+		return;
+
+	if (!(ctrl->oacs & NVME_CTRL_OACS_SEC_SUPP)) {
+		dev_err(ctrl->device,
+			"Controller does not support security commands");
+		return;
+	}
+
+	rc = nvme_sec_submit(ctrl, spsp, secp, resp, resp_size, false);
+	if (rc != 0) {
+		dev_err(ctrl->device,
+			"Failed to issue security receive command: {%d}", rc);
+		goto out;
+	}
+
+	protocol_list_length = cpu_to_le16(((u16)resp[6]) << 8 | ((u16)resp[7]));
+	for (int i = 0; i < protocol_list_length; ++i) {
+		protocol_list_index = 8 + i;
+		if (protocol_list_index >= resp_size) {
+			dev_err(ctrl->device,
+				"Malformed protocol list");
+			goto out;
+		}
+
+		switch (resp[protocol_list_index]) {
+		case NVME_SECURITY_DMTF_SPDM:
+			ctrl->security_spdm = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+out:
+	kfree(resp);
+}
+
 static int nvme_init_identify(struct nvme_ctrl *ctrl)
 {
 	struct queue_limits lim;
@@ -3463,6 +3517,10 @@ int nvme_init_ctrl_finish(struct nvme_ctrl *ctrl, bool was_suspended)
 	ctrl->identified = true;
 
 	nvme_start_keep_alive(ctrl);
+
+	/* Probe for any supported security protocols by the controller */
+	if (ctrl->oacs & NVME_CTRL_OACS_SEC_SUPP)
+		nvme_security_discover(ctrl);
 
 	return 0;
 }
