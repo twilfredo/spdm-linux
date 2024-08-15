@@ -405,6 +405,9 @@ struct nvme_ctrl {
 
 	enum nvme_ctrl_type cntrltype;
 	enum nvme_dctype dctype;
+
+	/* Support for DMTF SPDM over the NVMe Security Send/Receive commands */
+	bool security_spdm;
 };
 
 static inline enum nvme_ctrl_state nvme_ctrl_state(struct nvme_ctrl *ctrl)
