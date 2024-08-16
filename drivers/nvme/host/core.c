@@ -2350,7 +2350,7 @@ static int nvme_get_unique_id(struct gendisk *disk, u8 id[16],
 	return nvme_ns_get_unique_id(disk->private_data, id, type);
 }
 
-static int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t len,
+int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t len,
 		bool send)
 {
 	struct nvme_ctrl *ctrl = data;
@@ -2367,6 +2367,7 @@ static int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t l
 	return __nvme_submit_sync_cmd(ctrl->admin_q, &cmd, NULL, buffer, len,
 			NVME_QID_ANY, NVME_SUBMIT_AT_HEAD);
 }
+EXPORT_SYMBOL_GPL(nvme_sec_submit);
 
 #ifdef CONFIG_BLK_SED_OPAL
 static void nvme_configure_opal(struct nvme_ctrl *ctrl, bool was_suspended)
@@ -4780,6 +4781,7 @@ EXPORT_SYMBOL_GPL(nvme_start_ctrl);
 
 void nvme_uninit_ctrl(struct nvme_ctrl *ctrl)
 {
+	nvme_spdm_destroy(ctrl->device);
 	nvme_stop_keep_alive(ctrl);
 	nvme_hwmon_exit(ctrl);
 	nvme_fault_inject_fini(&ctrl->fault_inject);
