@@ -128,3 +128,18 @@ config NVME_APPLE
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called nvme-apple.
+
+config NVME_SPDM_STORAGE
+	bool "SPDM support over the NVMe Security Send/Receive Commands"
+	depends on NVME_CORE
+	select CRYPTO_ECDSA
+	select CRYPTO_RSA
+	select CRYPTO_SHA256
+	select CRYPTO_SHA512
+	select SPDM
+	help
+	  NVMe security Send/Receive commands are used for DMTF SPDM message based
+	  authentication, measurement and secure channel establishment. The
+	  transport specification is defined by the DMTF DSP0286.
+
+	  If unsure, say N.
