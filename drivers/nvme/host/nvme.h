@@ -17,6 +17,7 @@
 #include <linux/wait.h>
 #include <linux/t10-pi.h>
 #include <linux/ratelimit_types.h>
+#include <linux/spdm.h>
 
 #include <trace/events/block.h>
 
@@ -413,6 +414,10 @@ struct nvme_ctrl {
 
 	/* Support for DMTF SPDM over the NVMe Security Send/Receive commands */
 	bool security_spdm;
+#ifdef CONFIG_NVME_SPDM_STORAGE
+	struct spdm_state *spdm_state;
+	struct work_struct spdm_work;
+#endif
 };
 
 static inline enum nvme_ctrl_state nvme_ctrl_state(struct nvme_ctrl *ctrl)
@@ -934,6 +939,8 @@ int nvme_identify_ns(struct nvme_ctrl *ctrl, unsigned nsid,
 		struct nvme_id_ns **id);
 int nvme_getgeo(struct block_device *bdev, struct hd_geometry *geo);
 int nvme_dev_uring_cmd(struct io_uring_cmd *ioucmd, unsigned int issue_flags);
+int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer,
+		size_t len, bool send);
 
 extern const struct attribute_group *nvme_ns_attr_groups[];
 extern const struct pr_ops nvme_pr_ops;
@@ -1189,5 +1196,33 @@ static inline bool nvme_multi_css(struct nvme_ctrl *ctrl)
 {
 	return (ctrl->ctrl_config & NVME_CC_CSS_MASK) == NVME_CC_CSS_CSI;
 }
+
+#ifdef CONFIG_NVME_SPDM_STORAGE
+#define SPDM_STORAGE_MAX_SIZE_IN_BYTE			0x00100000
+/* As defined in the DMTF DSP0286 */
+#define SPDM_STORAGE_OPERATION_CODE_DISCOVERY	0x01
+#define SPDM_STORAGE_OPERATION_CODE_PENDING_INFO	0x02
+#define SPDM_STORAGE_OPERATION_CODE_MESSAGE	0x05
+#define SPDM_STORAGE_OPERATION_CODE_SECURED_MESSAGE	0x06
+
+void nvme_spdm_init(struct device *dev);
+int nvme_spdm_update_sysfs(struct device *dev);
+void nvme_spdm_destroy(struct device *dev);
+void nvme_spdm_publish(struct device *dev);
+void nvme_spdm_reauthenticate(struct device *dev);
+static inline void nvme_spdm_disable(struct device *dev)
+{
+	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
+
+	ctrl->spdm_state = NULL;
+}
+#else
+static inline void nvme_spdm_init(struct device *dev) { }
+static inline int nvme_spdm_update_sysfs(struct device *dev) { return -ENOTSUPP; }
+static inline void nvme_spdm_destroy(struct device *dev) { }
+static inline void nvme_spdm_publish(struct device *dev) { }
+static inline void nvme_spdm_reauthenticate(struct device *dev) { }
+static inline void vme_spdm_disable(struct device *dev) { }
+#endif /* CONFIG_NVME_SPDM_STORAGE*/
 
 #endif /* _NVME_H */

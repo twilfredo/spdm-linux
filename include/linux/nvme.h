@@ -10,6 +10,7 @@
 #include <linux/bits.h>
 #include <linux/types.h>
 #include <linux/uuid.h>
+#include <linux/device.h>
 
 /* NQN names in commands fields specified one size */
 #define NVMF_NQN_FIELD_LEN	256
@@ -2228,4 +2229,5 @@ enum nvme_pr_change_ptpl {
  * for security protocol definitions.
  */
 #define NVME_SECURITY_DMTF_SPDM		0xE8
+
 #endif /* _LINUX_NVME_H */
