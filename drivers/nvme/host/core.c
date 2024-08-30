@@ -3520,9 +3520,18 @@ int nvme_init_ctrl_finish(struct nvme_ctrl *ctrl, bool was_suspended)
 	nvme_start_keep_alive(ctrl);
 
 	/* Probe for any supported security protocols by the controller */
-	if (ctrl->oacs & NVME_CTRL_OACS_SEC_SUPP)
+	if (ctrl->oacs & NVME_CTRL_OACS_SEC_SUPP) {
 		nvme_security_discover(ctrl);
+		if (ctrl->security_spdm) {
+			nvme_spdm_init(ctrl->device);
+			if (nvme_dev_to_spdm_state(ctrl->device)) {
+				if (nvme_spdm_update_sysfs(ctrl->device))
+					dev_warn(ctrl->device, "Failed to update SPDM sysfs attributes\n");
 
+				nvme_spdm_publish(ctrl->device);
+			}
+		}
+	}
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nvme_init_ctrl_finish);
