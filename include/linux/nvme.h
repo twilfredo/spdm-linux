@@ -2188,4 +2188,13 @@ enum nvme_pr_change_ptpl {
  */
 #define NVME_SECURITY_DMTF_SPDM		0xE8
 
+#ifdef CONFIG_NVME_SPDM_STORAGE
+struct spdm_state *nvme_dev_to_spdm_state(struct device *dev);
+#else
+static inline struct spdm_state *nvme_dev_to_spdm_state(struct device *dev)
+{
+	return NULL;
+}
+#endif /* CONFIG_NVME_SPDM_STORAGE */
+
 #endif /* _LINUX_NVME_H */
