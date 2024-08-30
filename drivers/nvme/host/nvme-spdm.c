@@ -121,6 +121,21 @@ void nvme_spdm_init(struct device *dev)
 		spdm_authenticate(ctrl->spdm_state);
 }
 
+bool dev_is_nvme(struct device *dev)
+{
+	if (dev && strncmp(dev_name(dev), "nvme", 4) == 0)
+		return true;
+
+	return false;
+}
+
+struct spdm_state *nvme_dev_to_spdm_state(struct device *dev)
+{
+	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
+
+	return ctrl ? ctrl->spdm_state : NULL;
+}
+
 #ifdef CONFIG_SYSFS
 const struct attribute_group *nvme_spdm_attr_groups[] = {
 	&spdm_attr_group,
