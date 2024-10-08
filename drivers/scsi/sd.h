@@ -105,6 +105,8 @@ struct scsi_disk {
 	 */
 	u32		zone_starting_lba_gran;
 #endif
+	/* Support for DMTF SPDM over SCSI Security IN/OUT commands */
+	bool security_spdm;
 	atomic_t	openers;
 	sector_t	capacity;	/* size in logical blocks */
 	int		max_retries;
