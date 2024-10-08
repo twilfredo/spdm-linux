@@ -294,6 +294,9 @@ struct scsi_device {
 #define sdev_dbg(sdev, fmt, a...) \
 	dev_dbg(&(sdev)->sdev_gendev, fmt, ##a)
 
+/* Security Protocol DMTF SPDM */
+#define SCSI_SECURITY_DMTF_SPDM		0xE8
+
 /*
  * like scmd_printk, but the device name is passed in
  * as a string pointer
