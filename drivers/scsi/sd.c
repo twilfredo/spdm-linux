@@ -716,7 +716,6 @@ static int sd_major(int major_idx)
 	}
 }
 
-#ifdef CONFIG_BLK_SED_OPAL
 static int sd_sec_submit(void *data, u16 spsp, u8 secp, void *buffer,
 		size_t len, bool send)
 {
@@ -738,7 +737,6 @@ static int sd_sec_submit(void *data, u16 spsp, u8 secp, void *buffer,
 			       &exec_args);
 	return ret <= 0 ? ret : -EIO;
 }
-#endif /* CONFIG_BLK_SED_OPAL */
 
 /*
  * Look up the DIX operation based on whether the command is read or
@@ -3895,6 +3893,53 @@ static int sd_format_disk_name(char *prefix, int index, char *buf, int buflen)
 	return 0;
 }
 
+/*
+ * Discover supported security protocols by the SCSI disk
+ * NOTE: Currently only supports discovering support for DMTF SPDM.
+ */
+static void sd_security_discover(struct scsi_disk *sdkp)
+{
+	int rc;
+	uint16_t spsp = 0;
+	uint8_t secp = 0;
+	uint16_t resp_size = 512;
+	uint8_t *resp;
+	uint16_t protocol_list_length = 0;
+	uint16_t protocol_list_index = 0;
+
+	resp = kzalloc(resp_size, GFP_KERNEL);
+	if (!resp)
+		return;
+
+	rc = sd_sec_submit(sdkp, spsp, secp, resp, resp_size, false);
+	if (rc != 0) {
+		sd_printk(KERN_ERR, sdkp,
+			"Failed to issue security receive command: {%d}", rc);
+		goto out;
+	}
+
+	protocol_list_length = cpu_to_le16(((u16)resp[6]) << 8 | ((u16)resp[7]));
+	for (int i = 0; i < protocol_list_length; ++i) {
+		protocol_list_index = 8 + i;
+		if (protocol_list_index >= resp_size) {
+			sd_printk(KERN_ERR, sdkp,
+				"Malformed security protocol list");
+			goto out;
+		}
+
+		switch (resp[protocol_list_index]) {
+		case SCSI_SECURITY_DMTF_SPDM:
+			sdkp->security_spdm = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+out:
+	kfree(resp);
+}
+
 /**
  *	sd_probe - called during driver initialization and whenever a
  *	new scsi device is attached to the system. It is called once
@@ -4033,6 +4078,8 @@ static int sd_probe(struct device *dev)
 		if (sdkp->opal_dev)
 			sd_printk(KERN_NOTICE, sdkp, "supports TCG Opal\n");
 	}
+
+	sd_security_discover(sdkp);
 
 	sd_printk(KERN_NOTICE, sdkp, "Attached SCSI %sdisk\n",
 		  sdp->removable ? "removable " : "");
