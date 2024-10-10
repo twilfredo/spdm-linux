@@ -110,7 +110,13 @@ void scsi_spdm_init(struct device *dev)
  	 * to allow for provisioning of certificates and re-authentication.
  	 */
  	spdm_authenticate(sdkp->spdm_state);
+}
 
+struct spdm_state *scsi_dev_to_spdm_state(struct device *dev)
+{
+	struct scsi_disk *sdkp = dev_get_drvdata(dev);
+
+	return sdkp ? sdkp->spdm_state : NULL;
 }
 
 #ifdef CONFIG_SYSFS
