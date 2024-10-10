@@ -79,6 +79,21 @@ config SCSI_LIB_KUNIT_TEST
 comment "SCSI support type (disk, tape, CD-ROM)"
 	depends on SCSI
 
+config SCSI_SPDM_STORAGE
+	bool "SPDM support over the SCSI Security In/Out Commands"
+	depends on SCSI
+	select CRYPTO_ECDSA
+	select CRYPTO_RSA
+	select CRYPTO_SHA256
+	select CRYPTO_SHA512
+	select SPDM
+	help
+	  SCSI security In/Out commands are used for DMTF SPDM message based
+	  authentication, measurement and secure channel establishment. The
+	  transport specification is defined by the DMTF DSP0286.
+
+	  If unsure, say N.
+
 config BLK_DEV_SD
 	tristate "SCSI disk support"
 	depends on SCSI
