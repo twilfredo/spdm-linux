@@ -4081,6 +4081,15 @@ static int sd_probe(struct device *dev)
 	}
 
 	sd_security_discover(sdkp);
+	if (sdkp->security_spdm) {
+		scsi_spdm_init(dev);
+		if (scsi_dev_to_spdm_state(dev)) {
+			if (scsi_spdm_update_sysfs(dev))
+				sd_printk(KERN_WARNING, sdkp, "Failed to update SPDM sysfs attributes\n");
+
+			scsi_spdm_publish(dev);
+		}
+	}
 
 	sd_printk(KERN_NOTICE, sdkp, "Attached SCSI %sdisk\n",
 		  sdp->removable ? "removable " : "");
@@ -4114,6 +4123,7 @@ static int sd_remove(struct device *dev)
 {
 	struct scsi_disk *sdkp = dev_get_drvdata(dev);
 
+	scsi_spdm_destroy(dev);
 	scsi_autopm_get_device(sdkp->device);
 
 	device_del(&sdkp->disk_dev);
