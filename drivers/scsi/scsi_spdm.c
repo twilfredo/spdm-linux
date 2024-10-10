@@ -121,6 +121,21 @@ void scsi_spdm_init(struct device *dev)
 		spdm_authenticate(sdkp->spdm_state);
 }
 
+bool dev_is_scsi(struct device *dev)
+{
+	if (dev && dev->parent->bus && !strcmp(dev->parent->bus->name, "scsi"))
+		return true;
+
+	return false;
+}
+
+struct spdm_state *scsi_dev_to_spdm_state(struct device *dev)
+{
+	struct scsi_disk *sdkp = dev_get_drvdata(dev);
+
+	return sdkp ? sdkp->spdm_state : NULL;
+}
+
 #ifdef CONFIG_SYSFS
 const struct attribute_group *scsi_spdm_attr_groups[] = {
 	&spdm_attr_group,
