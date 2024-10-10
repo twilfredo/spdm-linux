@@ -107,6 +107,11 @@ struct scsi_disk {
 #endif
 	/* Support for DMTF SPDM over SCSI Security IN/OUT commands */
 	bool security_spdm;
+#ifdef CONFIG_SCSI_SPDM_STORAGE
+	struct spdm_state *spdm_state;
+	/* Keyring that userspace can poke SPDM certificates into */
+	struct key *spdm_keyring;
+#endif
 	atomic_t	openers;
 	sector_t	capacity;	/* size in logical blocks */
 	int		max_retries;
@@ -274,7 +279,37 @@ static inline unsigned int sd_zbc_complete(struct scsi_cmnd *cmd,
 
 #endif /* CONFIG_BLK_DEV_ZONED */
 
+#ifdef CONFIG_SCSI_SPDM_STORAGE
+#define SPDM_STORAGE_MAX_SIZE_IN_BYTE			0x00100000
+/* As defined in the DMTF DSP0286 */
+#define SPDM_STORAGE_OPERATION_CODE_DISCOVERY	0x01
+#define SPDM_STORAGE_OPERATION_CODE_PENDING_INFO	0x02
+#define SPDM_STORAGE_OPERATION_CODE_MESSAGE	0x05
+#define SPDM_STORAGE_OPERATION_CODE_SECURED_MESSAGE	0x06
+
+void scsi_spdm_init(struct device *dev);
+int scsi_spdm_update_sysfs(struct device *dev);
+void scsi_spdm_destroy(struct device *dev);
+void scsi_spdm_publish(struct device *dev);
+void scsi_spdm_reauthenticate(struct device *dev);
+static inline void scsi_spdm_disable(struct device *dev)
+{
+	struct scsi_disk *sdkp = to_scsi_disk(dev);
+
+	sdkp->spdm_state = NULL;
+}
+#else
+static inline void scsi_spdm_init(struct device *dev) { }
+static inline int scsi_spdm_update_sysfs(struct device *dev) { return -ENOSUPP; }
+static inline void scsi_spdm_destroy(struct device *dev) { }
+static inline void scsi_spdm_publish(struct device *dev) { }
+static inline void scsi_spdm_reauthenticate(struct device *dev) { }
+static inline void scsi_spdm_disable(struct device *dev) { }
+#endif /* CONFIG_SCSI_SPDM_STORAGE*/
+
 void sd_print_sense_hdr(struct scsi_disk *sdkp, struct scsi_sense_hdr *sshdr);
 void sd_print_result(const struct scsi_disk *sdkp, const char *msg, int result);
+int sd_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t len,
+		bool send);
 
 #endif /* _SCSI_DISK_H */
