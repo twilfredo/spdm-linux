@@ -716,7 +716,7 @@ static int sd_major(int major_idx)
 	}
 }
 
-static int sd_sec_submit(void *data, u16 spsp, u8 secp, void *buffer,
+int sd_sec_submit(void *data, u16 spsp, u8 secp, void *buffer,
 		size_t len, bool send)
 {
 	struct scsi_disk *sdkp = data;
@@ -737,6 +737,7 @@ static int sd_sec_submit(void *data, u16 spsp, u8 secp, void *buffer,
 			       &exec_args);
 	return ret <= 0 ? ret : -EIO;
 }
+EXPORT_SYMBOL_GPL(sd_sec_submit);
 
 /*
  * Look up the DIX operation based on whether the command is read or
