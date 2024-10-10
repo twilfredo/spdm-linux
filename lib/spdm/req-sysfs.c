@@ -12,6 +12,7 @@
 
 #include <linux/pci.h>
 #include <linux/nvme.h>
+#include <scsi/scsi_device.h>
 
 /**
  * dev_to_spdm_state() - Retrieve SPDM session state for given device
@@ -35,6 +36,9 @@ static struct spdm_state *dev_to_spdm_state(struct device *dev)
 
 	if (dev_is_nvme(dev))
 		return nvme_dev_to_spdm_state(dev);
+
+	if (dev_is_scsi(dev))
+		return scsi_dev_to_spdm_state(dev);
 
 	/* Insert mappers for further bus types here. */
 
