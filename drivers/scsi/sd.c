@@ -4331,6 +4331,7 @@ static int sd_resume_common(struct device *dev, bool runtime)
 		sdkp->suspended = false;
 	}
 
+	scsi_spdm_reauthenticate(dev);
 	return ret;
 }
 
