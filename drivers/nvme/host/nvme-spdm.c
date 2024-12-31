@@ -5,6 +5,12 @@
  */
 #include "nvme.h"
 
+/* Workqueue for SPDM authentication */
+struct workqueue_struct *nvme_spdm_wq;
+
+/* Keyring that userspace can poke certs into */
+static struct key *nvme_spdm_keyring;
+
 static ssize_t nvme_security_spdm_transceive(void *priv, struct device *dev,
 				 const void *request, size_t request_sz,
 				 void *response, size_t response_sz)
@@ -44,34 +50,46 @@ static ssize_t nvme_security_spdm_transceive(void *priv, struct device *dev,
 void nvme_spdm_reauthenticate(struct device *dev)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
-
-	if (ctrl->spdm_state)
-		spdm_authenticate(ctrl->spdm_state);
+	queue_work(nvme_spdm_wq,  &ctrl->spdm_work);
 }
 
 void nvme_spdm_destroy(struct device *dev)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
 
+	flush_workqueue(nvme_spdm_wq);
 	if (ctrl->spdm_state)
 		spdm_destroy(ctrl->spdm_state);
 
-	if (ctrl->spdm_keyring) {
-		key_revoke(ctrl->spdm_keyring);
-		key_put(ctrl->spdm_keyring);
-		ctrl->spdm_keyring = NULL;
-	}
 	nvme_spdm_disable(dev);
+	destroy_workqueue(nvme_spdm_wq);
+}
+
+/*
+ * Use a workqueue to do SPDM authentication work. At boot time, this avoids running
+ * into the issue of having to load required crypto modules from an async context with
+ * a request wait. Which is prohibited in __request_module().
+ */
+static void nvme_spdm_auth_work(struct work_struct *work)
+{
+	struct nvme_ctrl *ctrl =
+		container_of(work, struct nvme_ctrl, spdm_work);
+
+	if (!ctrl->spdm_state)
+		return;
+
+	spdm_authenticate(ctrl->spdm_state);
 }
 
 /* Initialise an SPDM session using the SPDM over Storage transport protocol */
 void nvme_spdm_init(struct device *dev)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
-	char keyring_name[32];
-	bool keyring_empty = false;
 
 	if (!ctrl->security_spdm)
+		return;
+
+	if (IS_ERR(nvme_spdm_keyring))
 		return;
 
 	/* Do not use the storage transport if PCI_CMA is utilized */
@@ -82,43 +100,27 @@ void nvme_spdm_init(struct device *dev)
 		return;
 	}
 
-	snprintf(keyring_name, 32, ".%s_spdm", dev_name(dev));
-
-	/*
-	 * We could be here from a controller reset context so the keyring already
-	 * exists.
-	 */
-	if (!ctrl->spdm_keyring) {
-		ctrl->spdm_keyring = keyring_alloc(keyring_name, KUIDT_INIT(0),
-						KGIDT_INIT(0), current_cred(),
-						(KEY_POS_ALL & ~KEY_POS_SETATTR) |
-						KEY_USR_VIEW | KEY_USR_READ |
-						KEY_USR_WRITE | KEY_USR_SEARCH,
-						KEY_ALLOC_NOT_IN_QUOTA |
-						KEY_ALLOC_SET_KEEP, NULL, NULL);
-		keyring_empty = true;
-	}
-
-	if (IS_ERR(ctrl->spdm_keyring)) {
-		ctrl->spdm_keyring = NULL;
-		dev_err(ctrl->device, "NVMe: Could not allocate %s keyring", keyring_name);
+	nvme_spdm_wq =  alloc_workqueue("nvme-spdm-wq", WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS, 0);
+	if (!nvme_spdm_wq)
 		return;
-	}
 
 	ctrl->spdm_state = spdm_create(ctrl->device, nvme_security_spdm_transceive,
-					   ctrl, SPDM_STORAGE_MAX_SIZE_IN_BYTE, ctrl->spdm_keyring,
+					   ctrl, SPDM_STORAGE_MAX_SIZE_IN_BYTE, nvme_spdm_keyring,
 					   NULL);
 
-	if (!ctrl->spdm_state)
+	if (!ctrl->spdm_state) {
+		dev_err(ctrl->device,
+			"Failed to create an SPDM session");
+		destroy_workqueue(nvme_spdm_wq);
 		return;
+	}
 
+	INIT_WORK(&ctrl->spdm_work, nvme_spdm_auth_work);
 	/*
-	 * No reason to authenticate if the keyring is empty, this is only useful
-	 * from a device reset context, where userspace has already poked
-	 * certificates in.
+	 * Keep spdm_state allocated even if initial authentication fails
+	 * to allow for provisioning of certificates and reauthentication.
 	 */
-	if (!keyring_empty)
-		spdm_authenticate(ctrl->spdm_state);
+	queue_work(nvme_spdm_wq,  &ctrl->spdm_work);
 }
 
 bool dev_is_nvme(struct device *dev)
@@ -182,3 +184,21 @@ void nvme_spdm_publish(struct device *dev)
 		spdm_publish_log(ctrl->spdm_state);
 }
 #endif
+
+__init static int nvme_spdm_keyring_init(void)
+{
+	nvme_spdm_keyring = keyring_alloc(".nvme_spdm", KUIDT_INIT(0), KGIDT_INIT(0),
+					current_cred(),
+					(KEY_POS_ALL & ~KEY_POS_SETATTR) |
+					KEY_USR_VIEW | KEY_USR_READ |
+					KEY_USR_WRITE | KEY_USR_SEARCH,
+					KEY_ALLOC_NOT_IN_QUOTA |
+					KEY_ALLOC_SET_KEEP, NULL, NULL);
+	if (IS_ERR(nvme_spdm_keyring)) {
+		pr_err("NVMe: Could not allocate .nvme_spdm keyring\n");
+		return PTR_ERR(nvme_spdm_keyring);
+	}
+
+	return 0;
+}
+subsys_initcall(nvme_spdm_keyring_init);
