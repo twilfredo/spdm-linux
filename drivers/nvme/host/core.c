@@ -3524,14 +3524,14 @@ int nvme_init_ctrl_finish(struct nvme_ctrl *ctrl, bool was_suspended)
 		nvme_security_discover(ctrl);
 		if (ctrl->security_spdm) {
 			/*
-			 * Maybe here from a controller reset, in which case we don't need
-			 * to re-init everything
+			 * Maybe here from a controller reset/resume, in which case we
+			 * don't need to re-init everything
 			 */
-			if (ctrl->spdm_state) {
+			if (nvme_dev_to_spdm_state(ctrl->device)) {
 				nvme_spdm_reauthenticate(ctrl->device);
 			} else {
 				nvme_spdm_init(ctrl->device);
-				if (ctrl->spdm_state) {
+				if (nvme_dev_to_spdm_state(ctrl->device)) {
 					if (nvme_spdm_update_sysfs(ctrl->device))
 						dev_warn(ctrl->device, "Failed to update SPDM sysfs attributes\n");
 
