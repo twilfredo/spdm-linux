@@ -4308,6 +4308,9 @@ static int sd_resume(struct device *dev)
 		return -EIO;
 	}
 
+	if (scsi_dev_to_spdm_state(dev) && sdkp->security_spdm)
+		scsi_spdm_reauthenticate(dev);
+
 	return 0;
 }
 
@@ -4331,7 +4334,6 @@ static int sd_resume_common(struct device *dev, bool runtime)
 		sdkp->suspended = false;
 	}
 
-	scsi_spdm_reauthenticate(dev);
 	return ret;
 }
 

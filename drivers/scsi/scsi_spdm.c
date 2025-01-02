@@ -10,6 +10,12 @@
 
 #include "sd.h"
 
+/* Workqueue for SPDM authentication */
+struct workqueue_struct *scsi_spdm_wq;
+
+/* Keyring that userspace can poke certs into */
+static struct key *scsi_spdm_keyring;
+
 static ssize_t scsi_security_spdm_transceive(void *priv, struct device *dev,
 				 const void *request, size_t request_sz,
 				 void *response, size_t response_sz)
@@ -48,9 +54,7 @@ static ssize_t scsi_security_spdm_transceive(void *priv, struct device *dev,
 void scsi_spdm_reauthenticate(struct device *dev)
 {
 	struct scsi_disk *sdkp = dev_get_drvdata(dev);
-
-	if (sdkp->spdm_state)
-		spdm_authenticate(sdkp->spdm_state);
+	queue_work(scsi_spdm_wq,  &sdkp->spdm_work);
 }
 
 void scsi_spdm_destroy(struct device *dev)
@@ -60,65 +64,60 @@ void scsi_spdm_destroy(struct device *dev)
 	if (sdkp->spdm_state)
 		spdm_destroy(sdkp->spdm_state);
 
-	if (sdkp->spdm_keyring) {
-		key_revoke(sdkp->spdm_keyring);
-		key_put(sdkp->spdm_keyring);
-		sdkp->spdm_keyring = NULL;
-	}
 	scsi_spdm_disable(dev);
+	destroy_workqueue(scsi_spdm_wq);
+}
+
+/*
+ * Use a workqueue to do SPDM authentication work. At boot time, this avoids running
+ * into the issue of having to load required crypto modules from an async context with
+ * a request wait. Which is prohibited in __request_module().
+ */
+static void scsi_spdm_auth_work(struct work_struct *work)
+{
+	struct scsi_disk *sdkp =
+		container_of(work, struct scsi_disk, spdm_work);
+
+	if (!sdkp->spdm_state)
+		return;
+
+	spdm_authenticate(sdkp->spdm_state);
 }
 
 void scsi_spdm_init(struct device *dev)
 {
 	struct scsi_disk *sdkp = dev_get_drvdata(dev);
-	char keyring_name[32];
-	bool keyring_empty = false;
 
 	if (!sdkp->security_spdm)
 		return;
-	/*
-	 * TODO CHECK!: Can scsi be over PCI? in which case if CMA is enabled and
-	 * a session exists, we don't want to do another. Double check this
-	 * case!
-	 */
-	snprintf(keyring_name, 32, ".scsi_spdm_%s", sdkp->disk->disk_name);
 
-	/*
-	 * We could be here from a controller reset context so the keyring already
-	 * exists.
-	 */
-	if (!sdkp->spdm_keyring) {
-		sdkp->spdm_keyring = keyring_alloc(keyring_name, KUIDT_INIT(0),
-								KGIDT_INIT(0), current_cred(),
-								(KEY_POS_ALL & ~KEY_POS_SETATTR) |
-								KEY_USR_VIEW | KEY_USR_READ |
-								KEY_USR_WRITE | KEY_USR_SEARCH,
-								KEY_ALLOC_NOT_IN_QUOTA |
-								KEY_ALLOC_SET_KEEP, NULL, NULL);
-		keyring_empty = true;
-	}
-
-	if (IS_ERR(sdkp->spdm_keyring)) {
-		sdkp->spdm_keyring = NULL;
-		sd_printk(KERN_ERR, sdkp, "Could not allocate %s keyring\n", keyring_name);
+	if (sdkp->spdm_state) {
+		sd_printk(KERN_ERR, sdkp, "An SPDM session already exists");
 		return;
 	}
+
+	if (IS_ERR(scsi_spdm_keyring))
+		return;
+
+	scsi_spdm_wq =  alloc_workqueue("scsi-spdm-wq", WQ_MEM_RECLAIM, 0);
+	if(!scsi_spdm_wq)
+		return;
 
 	sdkp->spdm_state = spdm_create(dev, scsi_security_spdm_transceive,
-					sdkp, SPDM_STORAGE_MAX_SIZE_IN_BYTE, sdkp->spdm_keyring,
+					sdkp, SPDM_STORAGE_MAX_SIZE_IN_BYTE, scsi_spdm_keyring,
 					NULL);
 	if (!sdkp->spdm_state) {
-		sd_printk(KERN_ERR, sdkp, "Failed to allocate an SPDM session\n");
+		sd_printk(KERN_ERR, sdkp, "Failed to create an SPDM session\n");
+		destroy_workqueue(scsi_spdm_wq);
 		return;
 	}
 
+	INIT_WORK(&sdkp->spdm_work, scsi_spdm_auth_work);
 	/*
-	 * No reason to authenticate if the keyring is empty, this is only useful
-	 * from a device reset context, where userspace has already poked
-	 * certificates in.
+	 * Keep spdm_state allocated even if initial authentication fails
+	 * to allow for provisioning of certificates and reauthentication.
 	 */
-	if (!keyring_empty)
-		spdm_authenticate(sdkp->spdm_state);
+	queue_work(scsi_spdm_wq,  &sdkp->spdm_work);
 }
 
 bool dev_is_scsi(struct device *dev)
@@ -184,3 +183,21 @@ void scsi_spdm_publish(struct device *dev)
 		spdm_publish_log(sdkp->spdm_state);
 }
 #endif
+
+__init static int scsi_spdm_keyring_init(void)
+{
+	scsi_spdm_keyring = keyring_alloc(".scsi_spdm", KUIDT_INIT(0), KGIDT_INIT(0),
+					current_cred(),
+					(KEY_POS_ALL & ~KEY_POS_SETATTR) |
+					KEY_USR_VIEW | KEY_USR_READ |
+					KEY_USR_WRITE | KEY_USR_SEARCH,
+					KEY_ALLOC_NOT_IN_QUOTA |
+					KEY_ALLOC_SET_KEEP, NULL, NULL);
+	if (IS_ERR(scsi_spdm_keyring)) {
+		pr_err("SCSI: Could not allocate .scsi_spdm keyring\n");
+		return PTR_ERR(scsi_spdm_keyring);
+	}
+
+	return 0;
+}
+subsys_initcall(scsi_spdm_keyring_init);

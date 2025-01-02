@@ -109,8 +109,7 @@ struct scsi_disk {
 	bool security_spdm;
 #ifdef CONFIG_SCSI_SPDM_STORAGE
 	struct spdm_state *spdm_state;
-	/* Keyring that userspace can poke SPDM certificates into */
-	struct key *spdm_keyring;
+	struct work_struct spdm_work;
 #endif
 	atomic_t	openers;
 	sector_t	capacity;	/* size in logical blocks */
