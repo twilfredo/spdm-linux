@@ -4082,12 +4082,20 @@ static int sd_probe(struct device *dev)
 
 	sd_security_discover(sdkp);
 	if (sdkp->security_spdm) {
-		scsi_spdm_init(dev);
-		if (scsi_dev_to_spdm_state(dev)) {
-			if (scsi_spdm_update_sysfs(dev))
-				sd_printk(KERN_WARNING, sdkp, "Failed to update SPDM sysfs attributes\n");
+		/*
+		 * Maybe here from a controller reset, in which case we don't need
+		 * to re-init everything. TODO: Can we be here from a reset?
+		 */
+		if (sdkp->spdm_state) {
+			scsi_spdm_reauthenticate(dev);
+		} else {
+			scsi_spdm_init(dev);
+			if (sdkp->spdm_state) {
+				if (scsi_spdm_update_sysfs(dev))
+					sd_printk(KERN_WARNING, sdkp, "Failed to update SPDM sysfs attributes\n");
 
-			scsi_spdm_publish(dev);
+				scsi_spdm_publish(dev);
+			}
 		}
 	}
 
