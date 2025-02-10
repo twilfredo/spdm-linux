@@ -79,7 +79,7 @@ static void nvmet_execute_create_sq(struct nvmet_req *req)
 		goto complete;
 	}
 
-	status = ctrl->ops->create_sq(ctrl, sqid, sq_flags, qsize, prp1);
+	status = ctrl->ops->create_sq(ctrl, sqid, cqid, sq_flags, qsize, prp1);
 
 complete:
 	nvmet_req_complete(req, status);
