@@ -2566,7 +2566,6 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 	fod->data_sg_cnt = 0;
 
 	ret = nvmet_req_init(&fod->req,
-				&fod->queue->nvme_cq,
 				&fod->queue->nvme_sq,
 				&nvmet_fc_tgt_fcp_ops);
 	if (!ret) {
