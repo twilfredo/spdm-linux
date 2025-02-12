@@ -327,7 +327,7 @@ static int nvme_loop_init_io_queues(struct nvme_loop_ctrl *ctrl)
 
 	for (i = 1; i <= nr_io_queues; i++) {
 		ctrl->queues[i].ctrl = ctrl;
-		ret = nvmet_sq_init(&ctrl->queues[i].nvme_sq);
+		ret = nvmet_sq_init(&ctrl->queues[i].nvme_sq, &ctrl->queues[i].nvme_cq);
 		if (ret)
 			goto out_destroy_queues;
 
@@ -360,7 +360,7 @@ static int nvme_loop_configure_admin_queue(struct nvme_loop_ctrl *ctrl)
 	int error;
 
 	ctrl->queues[0].ctrl = ctrl;
-	error = nvmet_sq_init(&ctrl->queues[0].nvme_sq);
+	error = nvmet_sq_init(&ctrl->queues[0].nvme_sq, &ctrl->queues[0].nvme_cq);
 	if (error)
 		return error;
 	ctrl->ctrl.queue_count = 1;
