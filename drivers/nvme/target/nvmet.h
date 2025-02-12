@@ -143,11 +143,13 @@ static inline struct device *nvmet_ns_dev(struct nvmet_ns *ns)
 struct nvmet_cq {
 	u16			qid;
 	u16			size;
+	refcount_t	ref;
 };
 
 struct nvmet_sq {
 	struct nvmet_ctrl	*ctrl;
 	struct percpu_ref	ref;
+	struct nvmet_cq	*cq;
 	u16			qid;
 	u16			size;
 	u32			sqhd;
@@ -572,10 +574,11 @@ u16 nvmet_cq_create(struct nvmet_ctrl *ctrl, struct nvmet_cq *cq, u16 qid,
 u16 nvmet_check_sqid(struct nvmet_ctrl *ctrl, u16 sqid, bool create);
 void nvmet_sq_setup(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq, u16 qid,
 		u16 size);
-u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq, u16 qid,
-		u16 size);
+u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
+		struct nvmet_cq *cq, u16 sqid, u16 size);
 void nvmet_sq_destroy(struct nvmet_sq *sq);
-int nvmet_sq_init(struct nvmet_sq *sq);
+bool __must_check nvmet_cq_destroy(struct nvmet_cq *cq);
+int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq);
 
 void nvmet_ctrl_fatal_error(struct nvmet_ctrl *ctrl);
 

@@ -866,6 +866,7 @@ u16 nvmet_cq_create(struct nvmet_ctrl *ctrl, struct nvmet_cq *cq,
 		return status;
 
 	nvmet_cq_setup(ctrl, cq, qid, size);
+	refcount_set(&cq->ref, 1);
 
 	return NVME_SC_SUCCESS;
 }
@@ -888,7 +889,7 @@ u16 nvmet_check_sqid(struct nvmet_ctrl *ctrl, u16 sqid,
 }
 
 u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
-		    u16 sqid, u16 size)
+		    struct nvmet_cq *cq, u16 sqid, u16 size)
 {
 	u16 status;
 	int ret;
@@ -900,7 +901,7 @@ u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
 	if (status != NVME_SC_SUCCESS)
 		return status;
 
-	ret = nvmet_sq_init(sq);
+	ret = nvmet_sq_init(sq, cq);
 	if (ret) {
 		status = NVME_SC_INTERNAL | NVME_STATUS_DNR;
 		goto ctrl_put;
@@ -917,6 +918,18 @@ ctrl_put:
 }
 EXPORT_SYMBOL_GPL(nvmet_sq_create);
 
+bool __must_check nvmet_cq_destroy(struct nvmet_cq *cq)
+{
+	/*
+	 * There must be no submission queues depending on this
+	 * completion queue. One is the initial ref count.
+	 */
+	 if (!refcount_dec_if_one(&cq->ref))
+		return false;
+	return true;
+}
+EXPORT_SYMBOL_GPL(nvmet_cq_destroy);
+
 void nvmet_sq_destroy(struct nvmet_sq *sq)
 {
 	struct nvmet_ctrl *ctrl = sq->ctrl;
@@ -931,6 +944,7 @@ void nvmet_sq_destroy(struct nvmet_sq *sq)
 	wait_for_completion(&sq->confirm_done);
 	wait_for_completion(&sq->free_done);
 	percpu_ref_exit(&sq->ref);
+	BUG_ON(!refcount_dec_not_one(&sq->cq->ref));
 	nvmet_auth_sq_free(sq);
 
 	/*
@@ -964,19 +978,22 @@ static void nvmet_sq_free(struct percpu_ref *ref)
 	complete(&sq->free_done);
 }
 
-int nvmet_sq_init(struct nvmet_sq *sq)
+int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq)
 {
 	int ret;
 
 	ret = percpu_ref_init(&sq->ref, nvmet_sq_free, 0, GFP_KERNEL);
 	if (ret) {
-		pr_err("percpu_ref init failed!\n");
+		pr_err("sq percpu_ref init failed!\n");
 		return ret;
 	}
 	init_completion(&sq->free_done);
 	init_completion(&sq->confirm_done);
-	nvmet_auth_sq_init(sq);
 
+	refcount_inc(&cq->ref);
+	sq->cq = cq;
+
+	nvmet_auth_sq_init(sq);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nvmet_sq_init);
