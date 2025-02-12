@@ -143,11 +143,15 @@ static inline struct device *nvmet_ns_dev(struct nvmet_ns *ns)
 struct nvmet_cq {
 	u16			qid;
 	u16			size;
+	struct percpu_ref	ref;
+	struct completion	free_done;
+	struct completion	confirm_done;
 };
 
 struct nvmet_sq {
 	struct nvmet_ctrl	*ctrl;
 	struct percpu_ref	ref;
+	struct nvmet_cq	*cq;
 	u16			qid;
 	u16			size;
 	u32			sqhd;

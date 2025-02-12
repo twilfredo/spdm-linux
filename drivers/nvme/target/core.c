@@ -919,6 +919,13 @@ ctrl_put:
 }
 EXPORT_SYMBOL_GPL(nvmet_sq_create);
 
+static void nvmet_confirm_cq(struct percpu_ref *ref)
+{
+	struct nvmet_cq *cq = container_of(ref, struct nvmet_cq, ref);
+
+	complete(&cq->confirm_done);
+}
+
 void nvmet_sq_destroy(struct nvmet_sq *sq)
 {
 	struct nvmet_ctrl *ctrl = sq->ctrl;
@@ -933,6 +940,15 @@ void nvmet_sq_destroy(struct nvmet_sq *sq)
 	wait_for_completion(&sq->confirm_done);
 	wait_for_completion(&sq->free_done);
 	percpu_ref_exit(&sq->ref);
+	/*
+	 * Drop the reference to the completion queue this SQ is
+	 * mapped to
+	 */
+	percpu_ref_kill_and_confirm(&sq->cq->ref, nvmet_confirm_cq);
+	wait_for_completion(&sq->cq->confirm_done);
+	wait_for_completion(&sq->cq->free_done);
+	percpu_ref_exit(&sq->cq->ref);
+
 	nvmet_auth_sq_free(sq);
 
 	/*
