@@ -579,6 +579,7 @@ void nvmet_sq_setup(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq, u16 qid,
 u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
 		struct nvmet_cq *cq, u16 sqid, u16 size);
 void nvmet_sq_destroy(struct nvmet_sq *sq);
+void nvmet_cq_destroy(struct nvmet_cq *cq);
 int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq);
 
 void nvmet_ctrl_fatal_error(struct nvmet_ctrl *ctrl);

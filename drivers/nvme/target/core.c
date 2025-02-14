@@ -858,9 +858,17 @@ u16 nvmet_check_cqid(struct nvmet_ctrl *ctrl, u16 cqid)
 	return NVME_SC_SUCCESS;
 }
 
+static void nvmet_cq_free(struct percpu_ref *ref)
+{
+	struct nvmet_cq *cq = container_of(ref, struct nvmet_cq, ref);
+
+	complete(&cq->free_done);
+}
+
 u16 nvmet_cq_create(struct nvmet_ctrl *ctrl, struct nvmet_cq *cq,
 		    u16 qid, u16 size)
 {
+	int ret;
 	u16 status;
 
 	status = nvmet_check_cqid(ctrl, qid);
@@ -868,6 +876,14 @@ u16 nvmet_cq_create(struct nvmet_ctrl *ctrl, struct nvmet_cq *cq,
 		return status;
 
 	nvmet_cq_setup(ctrl, cq, qid, size);
+
+	ret = percpu_ref_init(&cq->ref, nvmet_cq_free, 0, GFP_KERNEL);
+	if (ret) {
+		pr_err("cq percpu_ref init failed!\n");
+		return NVME_SC_INTERNAL | NVME_STATUS_DNR;;
+	}
+	init_completion(&cq->free_done);
+	init_completion(&cq->confirm_done);
 
 	return NVME_SC_SUCCESS;
 }
@@ -926,6 +942,19 @@ static void nvmet_confirm_cq(struct percpu_ref *ref)
 	complete(&cq->confirm_done);
 }
 
+void nvmet_cq_destroy(struct nvmet_cq *cq)
+{
+	/*
+	 * Make sure there are no submission queues depending on this
+	 * completion queue
+	 */
+	 percpu_ref_kill_and_confirm(&cq->ref, nvmet_confirm_cq);
+	 wait_for_completion(&cq->confirm_done);
+	 wait_for_completion(&cq->free_done);
+	 percpu_ref_exit(&cq->ref);
+}
+EXPORT_SYMBOL_GPL(nvmet_cq_destroy);
+
 void nvmet_sq_destroy(struct nvmet_sq *sq)
 {
 	struct nvmet_ctrl *ctrl = sq->ctrl;
@@ -944,11 +973,7 @@ void nvmet_sq_destroy(struct nvmet_sq *sq)
 	 * Drop the reference to the completion queue this SQ is
 	 * mapped to
 	 */
-	percpu_ref_kill_and_confirm(&sq->cq->ref, nvmet_confirm_cq);
-	wait_for_completion(&sq->cq->confirm_done);
-	wait_for_completion(&sq->cq->free_done);
-	percpu_ref_exit(&sq->cq->ref);
-
+	percpu_ref_put(&sq->cq->ref);
 	nvmet_auth_sq_free(sq);
 
 	/*
@@ -982,13 +1007,6 @@ static void nvmet_sq_free(struct percpu_ref *ref)
 	complete(&sq->free_done);
 }
 
-static void nvmet_cq_free(struct percpu_ref *ref)
-{
-	struct nvmet_cq *cq = container_of(ref, struct nvmet_cq, ref);
-
-	complete(&cq->free_done);
-}
-
 int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq)
 {
 	int ret;
@@ -1001,13 +1019,7 @@ int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq)
 	init_completion(&sq->free_done);
 	init_completion(&sq->confirm_done);
 
-	ret = percpu_ref_init(&cq->ref, nvmet_cq_free, 0, GFP_KERNEL);
-	if (ret) {
-		pr_err("cq percpu_ref init failed!\n");
-		return ret;
-	}
-	init_completion(&cq->free_done);
-	init_completion(&cq->confirm_done);
+	percpu_ref_get(&cq->ref);
 	sq->cq = cq;
 
 	nvmet_auth_sq_init(sq);
