@@ -91,7 +91,7 @@ static void nvmet_execute_delete_cq(struct nvmet_req *req)
 		goto complete;
 	}
 
-	if (!cqid) {
+	if (!cqid || cqid != req->sq->cq->qid) {
 		status = NVME_SC_QID_INVALID | NVME_STATUS_DNR;
 		goto complete;
 	}
