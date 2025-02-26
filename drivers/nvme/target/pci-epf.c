@@ -1319,6 +1319,10 @@ static u16 nvmet_pci_epf_delete_cq(struct nvmet_ctrl *tctrl, u16 cqid)
 	if (!test_and_clear_bit(NVMET_PCI_EPF_Q_LIVE, &cq->flags))
 		return NVME_SC_QID_INVALID | NVME_STATUS_DNR;
 
+	/* Check there are no submission queues depending */
+	if (!nvmet_cq_destroy(&cq->nvme_cq))
+		return NVME_SC_QID_INVALID | NVME_STATUS_DNR;
+
 	cancel_delayed_work_sync(&cq->work);
 	nvmet_pci_epf_drain_queue(cq);
 	nvmet_pci_epf_remove_irq_vector(ctrl, cq->vector);
@@ -1331,6 +1335,7 @@ static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
 {
 	struct nvmet_pci_epf_ctrl *ctrl = tctrl->drvdata;
 	struct nvmet_pci_epf_queue *sq = &ctrl->sq[sqid];
+	struct nvmet_pci_epf_queue *cq = &ctrl->cq[cqid];
 	u16 status;
 
 	if (test_and_set_bit(NVMET_PCI_EPF_Q_LIVE, &sq->flags))
@@ -1353,7 +1358,7 @@ static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
 		sq->qes = ctrl->io_sqes;
 	sq->pci_size = sq->qes * sq->depth;
 
-	status = nvmet_sq_create(tctrl, &sq->nvme_sq, sqid, sq->depth);
+	status = nvmet_sq_create(tctrl, &sq->nvme_sq, &cq->nvme_cq, sqid, sq->depth);
 	if (status != NVME_SC_SUCCESS)
 		goto out_clear_bit;
 

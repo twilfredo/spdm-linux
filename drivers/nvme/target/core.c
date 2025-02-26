@@ -842,17 +842,6 @@ u16 nvmet_check_cqid(struct nvmet_ctrl *ctrl, u16 cqid)
 	if (cqid > ctrl->subsys->max_qid)
 		return NVME_SC_QID_INVALID | NVME_STATUS_DNR;
 
-	/*
-	 * Note: For PCI controllers, the NVMe specifications allows multiple
-	 * SQs to share a single CQ. However, we do not support this yet, so
-	 * check that there is no SQ defined for a CQ. If one exist, then the
-	 * CQ ID is invalid for creation as well as when the CQ is being
-	 * deleted (as that would mean that the SQ was not deleted before the
-	 * CQ).
-	 */
-	if (ctrl->sqs[cqid])
-		return NVME_SC_QID_INVALID | NVME_STATUS_DNR;
-
 	return NVME_SC_SUCCESS;
 }
 
@@ -866,10 +855,23 @@ u16 nvmet_cq_create(struct nvmet_ctrl *ctrl, struct nvmet_cq *cq,
 		return status;
 
 	nvmet_cq_setup(ctrl, cq, qid, size);
+	refcount_set(&cq->ref, 1);
 
 	return NVME_SC_SUCCESS;
 }
 EXPORT_SYMBOL_GPL(nvmet_cq_create);
+
+bool __must_check nvmet_cq_destroy(struct nvmet_cq *cq)
+{
+	/*
+	 * There must be no submission queues depending on this
+	 * completion queue. One is the initial ref count.
+	 */
+	if (!refcount_dec_if_one(&cq->ref))
+		return false;
+
+	return true;
+}
 
 u16 nvmet_check_sqid(struct nvmet_ctrl *ctrl, u16 sqid,
 		     bool create)
@@ -888,7 +890,7 @@ u16 nvmet_check_sqid(struct nvmet_ctrl *ctrl, u16 sqid,
 }
 
 u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
-		    u16 sqid, u16 size)
+		    struct nvmet_cq *cq, u16 sqid, u16 size)
 {
 	u16 status;
 	int ret;
@@ -900,7 +902,7 @@ u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
 	if (status != NVME_SC_SUCCESS)
 		return status;
 
-	ret = nvmet_sq_init(sq);
+	ret = nvmet_sq_init(sq, cq);
 	if (ret) {
 		status = NVME_SC_INTERNAL | NVME_STATUS_DNR;
 		goto ctrl_put;
@@ -933,6 +935,9 @@ void nvmet_sq_destroy(struct nvmet_sq *sq)
 	percpu_ref_exit(&sq->ref);
 	nvmet_auth_sq_free(sq);
 
+	if (refcount_read(&sq->cq->ref))
+		WARN_ON(refcount_dec_and_test(&sq->cq->ref));
+
 	/*
 	 * we must reference the ctrl again after waiting for inflight IO
 	 * to complete. Because admin connect may have sneaked in after we
@@ -964,7 +969,7 @@ static void nvmet_sq_free(struct percpu_ref *ref)
 	complete(&sq->free_done);
 }
 
-int nvmet_sq_init(struct nvmet_sq *sq)
+int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq)
 {
 	int ret;
 
@@ -977,6 +982,15 @@ int nvmet_sq_init(struct nvmet_sq *sq)
 	init_completion(&sq->confirm_done);
 	nvmet_auth_sq_init(sq);
 
+	/*
+	 * Refcounting is required to allow queue sharing for PCI controllers,
+	 * if the cq reference is not initialized we don't need to increment
+	 * it here as the sq to cq mapping is 1:1
+	 */
+	if (refcount_read(&cq->ref))
+		refcount_inc(&cq->ref);
+
+	sq->cq = cq;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nvmet_sq_init);
