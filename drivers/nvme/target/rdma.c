@@ -1353,6 +1353,7 @@ static void nvmet_rdma_free_queue(struct nvmet_rdma_queue *queue)
 	pr_debug("freeing queue %d\n", queue->idx);
 
 	nvmet_sq_destroy(&queue->nvme_sq);
+	WARN_ON(nvmet_cq_destroy(&queue->nvme_cq) != NVME_SC_SUCCESS);
 
 	nvmet_rdma_destroy_queue_ib(queue);
 	if (!queue->nsrq) {
@@ -1436,6 +1437,7 @@ nvmet_rdma_alloc_queue(struct nvmet_rdma_device *ndev,
 		goto out_reject;
 	}
 
+	nvmet_cq_init(&queue->nvme_cq);
 	ret = nvmet_sq_init(&queue->nvme_sq);
 	if (ret) {
 		ret = NVME_RDMA_CM_NO_RSC;
