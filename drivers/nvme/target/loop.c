@@ -273,6 +273,7 @@ static void nvme_loop_destroy_admin_queue(struct nvme_loop_ctrl *ctrl)
 	nvme_unquiesce_admin_queue(&ctrl->ctrl);
 
 	nvmet_sq_destroy(&ctrl->queues[0].nvme_sq);
+	WARN_ON(nvmet_cq_destroy(&ctrl->queues[0].nvme_cq) != NVME_SC_SUCCESS);
 	nvme_remove_admin_tag_set(&ctrl->ctrl);
 }
 
@@ -302,6 +303,7 @@ static void nvme_loop_destroy_io_queues(struct nvme_loop_ctrl *ctrl)
 	for (i = 1; i < ctrl->ctrl.queue_count; i++) {
 		clear_bit(NVME_LOOP_Q_LIVE, &ctrl->queues[i].flags);
 		nvmet_sq_destroy(&ctrl->queues[i].nvme_sq);
+		WARN_ON(nvmet_cq_destroy(&ctrl->queues[i].nvme_cq) != NVME_SC_SUCCESS);
 	}
 	ctrl->ctrl.queue_count = 1;
 	/*
@@ -327,9 +329,16 @@ static int nvme_loop_init_io_queues(struct nvme_loop_ctrl *ctrl)
 
 	for (i = 1; i <= nr_io_queues; i++) {
 		ctrl->queues[i].ctrl = ctrl;
+		nvmet_cq_init(&ctrl->queues[i].nvme_cq);
 		ret = nvmet_sq_init(&ctrl->queues[i].nvme_sq);
-		if (ret)
+		if (ret) {
+			/*
+			 * Destroy the latest CQ initialized, rest will be cleaned up
+			 * by nvme_loop_destroy_io_queues() depending on`queue_count`.
+			 */
+			nvmet_cq_destroy(&ctrl->queues[i].nvme_cq);
 			goto out_destroy_queues;
+		}
 
 		ctrl->ctrl.queue_count++;
 	}
@@ -360,9 +369,12 @@ static int nvme_loop_configure_admin_queue(struct nvme_loop_ctrl *ctrl)
 	int error;
 
 	ctrl->queues[0].ctrl = ctrl;
+	nvmet_cq_init(&ctrl->queues[0].nvme_cq);
 	error = nvmet_sq_init(&ctrl->queues[0].nvme_sq);
-	if (error)
+	if (error) {
+		WARN_ON(nvmet_cq_destroy(&ctrl->queues[0].nvme_cq) != NVME_SC_SUCCESS);
 		return error;
+	}
 	ctrl->ctrl.queue_count = 1;
 
 	error = nvme_alloc_admin_tag_set(&ctrl->ctrl, &ctrl->admin_tag_set,
@@ -401,6 +413,7 @@ out_cleanup_tagset:
 	nvme_remove_admin_tag_set(&ctrl->ctrl);
 out_free_sq:
 	nvmet_sq_destroy(&ctrl->queues[0].nvme_sq);
+	WARN_ON(nvmet_cq_destroy(&ctrl->queues[0].nvme_cq) != NVME_SC_SUCCESS);
 	return error;
 }
 
