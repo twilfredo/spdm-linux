@@ -101,7 +101,11 @@ static void nvmet_execute_delete_cq(struct nvmet_req *req)
 		goto complete;
 	}
 
-	status = nvmet_check_cqid(ctrl, cqid);
+	status = nvmet_check_cqid(ctrl, cqid, false);
+	if (status != NVME_SC_SUCCESS)
+		goto complete;
+
+	status = nvmet_cq_destroy(req->cq);
 	if (status != NVME_SC_SUCCESS)
 		goto complete;
 
@@ -132,7 +136,7 @@ static void nvmet_execute_create_cq(struct nvmet_req *req)
 		goto complete;
 	}
 
-	status = nvmet_check_cqid(ctrl, cqid);
+	status = nvmet_check_cqid(ctrl, cqid, true);
 	if (status != NVME_SC_SUCCESS)
 		goto complete;
 
