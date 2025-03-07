@@ -830,16 +830,18 @@ nvmet_fc_alloc_target_queue(struct nvmet_fc_tgt_assoc *assoc,
 
 	nvmet_fc_prep_fcp_iodlist(assoc->tgtport, queue);
 
+	nvmet_cq_init(&queue->nvme_cq);
 	ret = nvmet_sq_init(&queue->nvme_sq);
 	if (ret)
-		goto out_fail_iodlist;
+		goto out_dest_cq_fail_iodlist;
 
 	WARN_ON(assoc->queues[qid]);
 	assoc->queues[qid] = queue;
 
 	return queue;
 
-out_fail_iodlist:
+out_dest_cq_fail_iodlist:
+	WARN_ON(nvmet_cq_destroy(&queue->nvme_cq) != NVME_SC_SUCCESS);
 	nvmet_fc_destroy_fcp_iodlist(assoc->tgtport, queue);
 	destroy_workqueue(queue->work_q);
 out_free_queue:
@@ -948,6 +950,7 @@ nvmet_fc_delete_target_queue(struct nvmet_fc_tgt_queue *queue)
 	flush_workqueue(queue->work_q);
 
 	nvmet_sq_destroy(&queue->nvme_sq);
+	WARN_ON(nvmet_cq_destroy(&queue->nvme_cq) != NVME_SC_SUCCESS);
 
 	nvmet_fc_tgt_q_put(queue);
 }
