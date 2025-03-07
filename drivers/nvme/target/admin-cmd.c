@@ -88,6 +88,7 @@ complete:
 static void nvmet_execute_delete_cq(struct nvmet_req *req)
 {
 	struct nvmet_ctrl *ctrl = req->sq->ctrl;
+	struct nvmet_cq *cq;
 	u16 cqid = le16_to_cpu(req->cmd->delete_queue.qid);
 	u16 status;
 
@@ -96,14 +97,21 @@ static void nvmet_execute_delete_cq(struct nvmet_req *req)
 		goto complete;
 	}
 
+	cq = ctrl->cqs[cqid];
 	if (!cqid) {
 		status = NVME_SC_QID_INVALID | NVME_STATUS_DNR;
 		goto complete;
 	}
 
-	status = nvmet_check_cqid(ctrl, cqid);
+	status = nvmet_check_cqid(ctrl, cqid, false);
 	if (status != NVME_SC_SUCCESS)
 		goto complete;
+
+	if (nvmet_cq_is_deletable(cq)) {
+		/* Some SQs are still using this CQ */
+		status = NVME_SC_QID_INVALID | NVME_STATUS_DNR;
+		goto complete;
+	}
 
 	status = ctrl->ops->delete_cq(ctrl, cqid);
 
@@ -132,7 +140,7 @@ static void nvmet_execute_create_cq(struct nvmet_req *req)
 		goto complete;
 	}
 
-	status = nvmet_check_cqid(ctrl, cqid);
+	status = nvmet_check_cqid(ctrl, cqid, true);
 	if (status != NVME_SC_SUCCESS)
 		goto complete;
 
