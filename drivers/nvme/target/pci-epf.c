@@ -1327,10 +1327,11 @@ static u16 nvmet_pci_epf_delete_cq(struct nvmet_ctrl *tctrl, u16 cqid)
 }
 
 static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
-		u16 sqid, u16 flags, u16 qsize, u64 pci_addr)
+		u16 sqid, u16 cqid, u16 flags, u16 qsize, u64 pci_addr)
 {
 	struct nvmet_pci_epf_ctrl *ctrl = tctrl->drvdata;
 	struct nvmet_pci_epf_queue *sq = &ctrl->sq[sqid];
+	struct nvmet_pci_epf_queue *cq = &ctrl->sq[cqid];
 	u16 status;
 
 	if (test_and_set_bit(NVMET_PCI_EPF_Q_LIVE, &sq->flags))
@@ -1353,7 +1354,7 @@ static u16 nvmet_pci_epf_create_sq(struct nvmet_ctrl *tctrl,
 		sq->qes = ctrl->io_sqes;
 	sq->pci_size = sq->qes * sq->depth;
 
-	status = nvmet_sq_create(tctrl, &sq->nvme_sq, sqid, sq->depth);
+	status = nvmet_sq_create(tctrl, &sq->nvme_sq, &cq->nvme_cq, sqid, sq->depth);
 	if (status != NVME_SC_SUCCESS)
 		goto out_clear_bit;
 
@@ -1860,7 +1861,7 @@ static int nvmet_pci_epf_enable_ctrl(struct nvmet_pci_epf_ctrl *ctrl)
 
 	qsize = aqa & 0x00000fff;
 	pci_addr = asq & GENMASK_ULL(63, 12);
-	status = nvmet_pci_epf_create_sq(ctrl->tctrl, 0, NVME_QUEUE_PHYS_CONTIG,
+	status = nvmet_pci_epf_create_sq(ctrl->tctrl, 0, 0, NVME_QUEUE_PHYS_CONTIG,
 					 qsize, pci_addr);
 	if (status != NVME_SC_SUCCESS) {
 		dev_err(ctrl->dev, "Failed to create admin submission queue\n");
