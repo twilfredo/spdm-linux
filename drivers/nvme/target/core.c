@@ -911,7 +911,7 @@ u16 nvmet_check_sqid(struct nvmet_ctrl *ctrl, u16 sqid,
 }
 
 u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
-		    u16 sqid, u16 size)
+		    struct nvmet_cq *cq, u16 sqid, u16 size)
 {
 	u16 status;
 	int ret;
@@ -923,7 +923,7 @@ u16 nvmet_sq_create(struct nvmet_ctrl *ctrl, struct nvmet_sq *sq,
 	if (status != NVME_SC_SUCCESS)
 		return status;
 
-	ret = nvmet_sq_init(sq);
+	ret = nvmet_sq_init(sq, cq);
 	if (ret) {
 		status = NVME_SC_INTERNAL | NVME_STATUS_DNR;
 		goto ctrl_put;
@@ -955,6 +955,7 @@ void nvmet_sq_destroy(struct nvmet_sq *sq)
 	wait_for_completion(&sq->free_done);
 	percpu_ref_exit(&sq->ref);
 	nvmet_auth_sq_free(sq);
+	nvmet_cq_put(sq->cq);
 
 	/*
 	 * we must reference the ctrl again after waiting for inflight IO
@@ -987,7 +988,7 @@ static void nvmet_sq_free(struct percpu_ref *ref)
 	complete(&sq->free_done);
 }
 
-int nvmet_sq_init(struct nvmet_sq *sq)
+int nvmet_sq_init(struct nvmet_sq *sq, struct nvmet_cq *cq)
 {
 	int ret;
 
@@ -1000,6 +1001,11 @@ int nvmet_sq_init(struct nvmet_sq *sq)
 	init_completion(&sq->confirm_done);
 	nvmet_auth_sq_init(sq);
 
+	if (!refcount_inc_not_zero(&cq->ref)) {
+		pr_err("cq=%u not initialized\n", cq->qid);
+		return -EAGAIN;
+	}
+	sq->cq = cq;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nvmet_sq_init);
