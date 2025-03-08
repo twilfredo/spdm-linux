@@ -63,23 +63,25 @@ static void nvmet_execute_create_sq(struct nvmet_req *req)
 	if (status != NVME_SC_SUCCESS)
 		goto complete;
 
-	/*
-	 * Note: The NVMe specification allows multiple SQs to use the same CQ.
-	 * However, the target code does not really support that. So for now,
-	 * prevent this and fail the command if sqid and cqid are different.
-	 */
-	if (!cqid || cqid != sqid) {
+	if (!cqid) {
 		pr_err("SQ %u: Unsupported CQID %u\n", sqid, cqid);
 		status = NVME_SC_CQ_INVALID | NVME_STATUS_DNR;
 		goto complete;
 	}
+
+	status = nvmet_check_cqid(ctrl, cqid, false);
+	if (status != NVME_SC_SUCCESS) {
+		pr_err("SQ %u: Unsupported CQID %u\n", sqid, cqid);
+		goto complete;
+	}
+
 
 	if (!qsize || qsize > NVME_CAP_MQES(ctrl->cap)) {
 		status = NVME_SC_QUEUE_SIZE | NVME_STATUS_DNR;
 		goto complete;
 	}
 
-	status = ctrl->ops->create_sq(ctrl, sqid, sq_flags, qsize, prp1);
+	status = ctrl->ops->create_sq(ctrl, sqid, cqid, sq_flags, qsize, prp1);
 
 complete:
 	nvmet_req_complete(req, status);
