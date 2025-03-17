@@ -1911,6 +1911,7 @@ static void nvmet_pci_epf_disable_ctrl(struct nvmet_pci_epf_ctrl *ctrl)
 	nvmet_pci_epf_delete_cq(ctrl->tctrl, 0);
 
 	ctrl->csts &= ~NVME_CSTS_RDY;
+	ctrl->cc &= ~NVME_CC_ENABLE;
 }
 
 static void nvmet_pci_epf_poll_cc_work(struct work_struct *work)
