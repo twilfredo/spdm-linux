@@ -79,6 +79,9 @@ struct rockchip_pcie_of_data {
 	const struct pci_epc_features *epc_features;
 };
 
+static int rockchip_pcie_rc_reset_slot(struct pci_host_bridge *bridge,
+				  struct pci_dev *pdev);
+
 static int rockchip_pcie_readl_apb(struct rockchip_pcie *rockchip, u32 reg)
 {
 	return readl_relaxed(rockchip->apb_base + reg);
@@ -256,6 +259,8 @@ static int rockchip_pcie_host_init(struct dw_pcie_rp *pp)
 
 	irq_set_chained_handler_and_data(irq, rockchip_pcie_intx_handler,
 					 rockchip);
+
+	pp->bridge->reset_slot = rockchip_pcie_rc_reset_slot;
 
 	return 0;
 }
@@ -493,6 +498,11 @@ static irqreturn_t rockchip_pcie_rc_sys_irq_thread(int irq, void *arg)
 	dev_dbg(dev, "PCIE_CLIENT_INTR_STATUS_MISC: %#x\n", reg);
 	dev_dbg(dev, "LTSSM_STATUS: %#x\n", rockchip_pcie_get_ltssm(rockchip));
 
+	if (reg & PCIE_LINK_REQ_RST_NOT_INT) {
+		dev_dbg(dev, "hot reset or link-down reset\n");
+		pci_host_handle_link_down(pp->bridge);
+	}
+
 	if (reg & PCIE_RDLH_LINK_UP_CHGED) {
 		val = rockchip_pcie_get_ltssm(rockchip);
 		if ((val & PCIE_LINKUP) == PCIE_LINKUP) {
@@ -547,12 +557,12 @@ static void rockchip_pcie_ltssm_enable_control_mode(struct rockchip_pcie *rockch
 	rockchip_pcie_writel_apb(rockchip, mode, PCIE_CLIENT_GENERAL_CONTROL);
 }
 
-static void rockchip_pcie_unmask_dll_indicator(struct rockchip_pcie *rockchip)
+static void rockchip_pcie_unmask_link_irqs(struct rockchip_pcie *rockchip)
 {
 	u32 val;
 
-	/* unmask DLL up/down indicator */
-	val = HIWORD_UPDATE(PCIE_RDLH_LINK_UP_CHGED, 0);
+	/* unmask DLL up/down indicator and hot reset/link-down reset irq */
+	val = HIWORD_UPDATE(PCIE_RDLH_LINK_UP_CHGED | PCIE_LINK_REQ_RST_NOT_INT, 0);
 	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_INTR_MASK_MISC);
 }
 
@@ -590,7 +600,7 @@ static int rockchip_pcie_configure_rc(struct platform_device *pdev,
 		return ret;
 	}
 
-	rockchip_pcie_unmask_dll_indicator(rockchip);
+	rockchip_pcie_unmask_link_irqs(rockchip);
 
 	return ret;
 }
@@ -638,10 +648,77 @@ static int rockchip_pcie_configure_ep(struct platform_device *pdev,
 	}
 
 	pci_epc_init_notify(rockchip->pci.ep.epc);
+	rockchip_pcie_unmask_link_irqs(rockchip);
 
-	/* unmask DLL up/down indicator and hot reset/link-down reset */
-	val = HIWORD_UPDATE(PCIE_RDLH_LINK_UP_CHGED | PCIE_LINK_REQ_RST_NOT_INT, 0);
-	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_INTR_MASK_MISC);
+	return ret;
+}
+
+static int rockchip_pcie_rc_reset_slot(struct pci_host_bridge *bridge,
+				  struct pci_dev *pdev)
+{
+	struct pci_bus *bus = bridge->bus;
+	struct dw_pcie_rp *pp = bus->sysdata;
+	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
+	struct rockchip_pcie *rockchip = to_rockchip_pcie(pci);
+	struct device *dev = rockchip->pci.dev;
+	u32 val;
+	int ret;
+
+	dw_pcie_stop_link(pci);
+	if (pci->pp.ops->deinit)
+		pci->pp.ops->deinit(&pci->pp);
+
+	rockchip_pcie_phy_deinit(rockchip);
+	ret = reset_control_assert(rockchip->rst);
+	if (ret)
+		return ret;
+
+	ret = rockchip_pcie_phy_init(rockchip);
+	if (ret)
+		goto disable_regulator;
+
+	ret = reset_control_deassert(rockchip->rst);
+	if (ret)
+		goto deinit_phy;
+
+	ret = rockchip_pcie_clk_init(rockchip);
+	if (ret)
+		goto deinit_phy;
+
+	if (pp->ops->init) {
+		ret = pp->ops->init(pp);
+		if (ret) {
+			dev_err(dev, "Host init failed: %d\n", ret);
+			goto deinit_clk;
+		}
+	}
+
+	ret = dw_pcie_setup_rc(pp);
+	if (ret) {
+		dev_err(dev, "Failed to setup RC: %d\n", ret);
+		goto deinit_clk;
+	}
+
+	rockchip_pcie_ltssm_enable_control_mode(rockchip, PCIE_CLIENT_RC_MODE);
+	rockchip_pcie_unmask_link_irqs(rockchip);
+
+	ret = dw_pcie_start_link(pci);
+	if (ret)
+		return ret;
+
+	ret = dw_pcie_wait_for_link(pci);
+	if (ret)
+		return ret;
+
+	return ret;
+
+deinit_clk:
+	clk_bulk_disable_unprepare(rockchip->clk_cnt, rockchip->clks);
+deinit_phy:
+	rockchip_pcie_phy_deinit(rockchip);
+disable_regulator:
+	if (rockchip->vpcie3v3)
+		regulator_disable(rockchip->vpcie3v3);
 
 	return ret;
 }
@@ -796,7 +873,7 @@ static int __maybe_unused rockchip_pcie_resume(struct device *dev)
 				 PCIE_CLIENT_INTR_MASK_LEGACY);
 
 	rockchip_pcie_ltssm_enable_control_mode(rockchip, PCIE_CLIENT_RC_MODE);
-	rockchip_pcie_unmask_dll_indicator(rockchip);
+	rockchip_pcie_unmask_link_irqs(rockchip);
 
 	ret = dw_pcie_resume_noirq(pci);
 	if (ret) {
