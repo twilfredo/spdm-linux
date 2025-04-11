@@ -643,6 +643,9 @@ static int rockchip_pcie_rc_reset_slot(struct pci_host_bridge *bridge,
 	val = HIWORD_UPDATE(PCIE_RDLH_LINK_UP_CHGED | PCIE_LINK_REQ_RST_NOT_INT, 0);
 	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_INTR_MASK_MISC);
 
+	/* Allow some time for downstream devices to be ready */
+	msleep(1000);
+
 	ret = dw_pcie_start_link(pci);
 	if (ret)
 		return ret;
