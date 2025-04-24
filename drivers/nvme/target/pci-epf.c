@@ -166,6 +166,7 @@ struct nvmet_pci_epf_ctrl {
 	struct nvmet_pci_epf_queue	*sq;
 	struct nvmet_pci_epf_queue	*cq;
 	unsigned int			sq_ab;
+	bool				cq_dma;
 
 	mempool_t			iod_pool;
 	void				*bar;
@@ -222,6 +223,7 @@ struct nvmet_pci_epf {
 	__le16				portid;
 	char				subsysnqn[NVMF_NQN_SIZE];
 	unsigned int			mdts_kb;
+	bool				cq_dma;
 };
 
 static inline u32 nvmet_pci_epf_bar_read32(struct nvmet_pci_epf_ctrl *ctrl,
@@ -1299,22 +1301,26 @@ static u16 nvmet_pci_epf_create_cq(struct nvmet_ctrl *tctrl,
 	if (status != NVME_SC_SUCCESS)
 		goto err;
 
-	/*
-	 * Map the CQ PCI address space and since PCI endpoint controllers may
-	 * return a partial mapping, check that the mapping is large enough.
-	 */
-	ret = nvmet_pci_epf_mem_map(ctrl->nvme_epf, cq->pci_addr, cq->pci_size,
-				    &cq->pci_map);
-	if (ret) {
-		dev_err(ctrl->dev, "Failed to map CQ %u (err=%d)\n",
-			cq->qid, ret);
-		goto err_internal;
-	}
+	if (!ctrl->cq_dma) {
+		/*
+		 * Map the CQ PCI address space and since PCI endpoint
+		 * controllers may return a partial mapping, check that the
+		 * mapping is large enough.
+		 */
+		ret = nvmet_pci_epf_mem_map(ctrl->nvme_epf, cq->pci_addr,
+					    cq->pci_size, &cq->pci_map);
+		if (ret) {
+			dev_err(ctrl->dev, "Failed to map CQ %u (err=%d)\n",
+				cq->qid, ret);
+			goto err_internal;
+		}
 
-	if (cq->pci_map.pci_size < cq->pci_size) {
-		dev_err(ctrl->dev, "Invalid partial mapping of queue %u\n",
-			cq->qid);
-		goto err_unmap_queue;
+		if (cq->pci_map.pci_size < cq->pci_size) {
+			dev_err(ctrl->dev,
+				"Invalid partial mapping of queue %u\n",
+				cq->qid);
+			goto err_unmap_queue;
+		}
 	}
 
 	set_bit(NVMET_PCI_EPF_Q_LIVE, &cq->flags);
@@ -1345,7 +1351,8 @@ static u16 nvmet_pci_epf_delete_cq(struct nvmet_ctrl *tctrl, u16 cqid)
 	cancel_delayed_work_sync(&cq->work);
 	nvmet_pci_epf_drain_queue(cq);
 	nvmet_pci_epf_remove_irq_vector(ctrl, cq->vector);
-	nvmet_pci_epf_mem_unmap(ctrl->nvme_epf, &cq->pci_map);
+	if (!ctrl->cq_dma)
+		nvmet_pci_epf_mem_unmap(ctrl->nvme_epf, &cq->pci_map);
 
 	return NVME_SC_SUCCESS;
 }
@@ -1782,8 +1789,13 @@ static void nvmet_pci_epf_cq_work(struct work_struct *work)
 			le64_to_cpu(cqe->result.u64), cq->head, cq->tail,
 			cq->phase);
 
-		memcpy_toio(cq->pci_map.virt_addr + cq->tail * cq->qes,
-			    cqe, cq->qes);
+		if (ctrl->cq_dma)
+			nvmet_pci_epf_transfer(ctrl, cqe,
+					       cq->pci_addr + cq->tail * cq->qes,
+					       cq->qes, DMA_TO_DEVICE);
+		else
+			memcpy_toio(cq->pci_map.virt_addr + cq->tail * cq->qes,
+				    cqe, cq->qes);
 
 		cq->tail++;
 		if (cq->tail >= cq->depth) {
@@ -2014,6 +2026,7 @@ static int nvmet_pci_epf_create_ctrl(struct nvmet_pci_epf *nvme_epf,
 	mutex_init(&ctrl->irq_lock);
 	ctrl->nvme_epf = nvme_epf;
 	ctrl->mdts = nvme_epf->mdts_kb * SZ_1K;
+	ctrl->cq_dma = nvme_epf->cq_dma;
 	INIT_DELAYED_WORK(&ctrl->poll_cc, nvmet_pci_epf_poll_cc_work);
 	INIT_DELAYED_WORK(&ctrl->poll_sqs, nvmet_pci_epf_poll_sqs_work);
 
@@ -2558,10 +2571,41 @@ static ssize_t nvmet_pci_epf_mdts_kb_store(struct config_item *item,
 
 CONFIGFS_ATTR(nvmet_pci_epf_, mdts_kb);
 
+static ssize_t nvmet_pci_epf_cq_dma_show(struct config_item *item, char *page)
+{
+	struct config_group *group = to_config_group(item);
+	struct nvmet_pci_epf *nvme_epf = to_nvme_epf(group);
+
+	return sysfs_emit(page, "%u\n", !!nvme_epf->cq_dma);
+}
+
+static ssize_t nvmet_pci_epf_cq_dma_store(struct config_item *item,
+					  const char *page, size_t len)
+{
+	struct config_group *group = to_config_group(item);
+	struct nvmet_pci_epf *nvme_epf = to_nvme_epf(group);
+	bool cq_dma;
+	int ret;
+
+	if (nvme_epf->ctrl.tctrl)
+		return -EBUSY;
+
+	ret = kstrtobool(page, &cq_dma);
+	if (ret)
+		return ret;
+
+	nvme_epf->cq_dma = cq_dma;
+
+	return len;
+}
+
+CONFIGFS_ATTR(nvmet_pci_epf_, cq_dma);
+
 static struct configfs_attribute *nvmet_pci_epf_attrs[] = {
 	&nvmet_pci_epf_attr_portid,
 	&nvmet_pci_epf_attr_subsysnqn,
 	&nvmet_pci_epf_attr_mdts_kb,
+	&nvmet_pci_epf_attr_cq_dma,
 	NULL,
 };
 
