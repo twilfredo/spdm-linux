@@ -84,6 +84,9 @@ attribute-sets:
         name: remote-auth
         type: u32
         multi-attr: true
+      -
+        name: key-serial
+        type: u32
 
 operations:
   list:
@@ -119,6 +122,7 @@ operations:
             - status
             - sockfd
             - remote-auth
+            - key-serial
 
 mcast-groups:
   list:
