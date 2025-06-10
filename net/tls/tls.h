@@ -312,17 +312,19 @@ tls_advance_record_sn(struct sock *sk, struct tls_prot_info *prot,
 	struct tls_sw_context_rx *rx_ctx = tls_ctx->priv_ctx_rx;
 
 	if (!unlikely(rx_ctx->key_update_pending)) {
-		if (ctx->rec_seq[0] == 255 &&
-			ctx->rec_seq[1] == 255 &&
-			ctx->rec_seq[2] == 255 &&
-			ctx->rec_seq[3] == 255 &&
-			ctx->rec_seq[4] == 255 &&
-			ctx->rec_seq[5] == 255 &&
-			ctx->rec_seq[6] == 255 &&
-			ctx->rec_seq[7] == 245) {
+		if (ctx->rec_seq[0] == 0 &&
+			ctx->rec_seq[1] == 0 &&
+			ctx->rec_seq[2] == 0 &&
+			ctx->rec_seq[3] == 0 &&
+			ctx->rec_seq[4] == 0 &&
+			ctx->rec_seq[5] == 0 &&
+			ctx->rec_seq[6] == 0 &&
+			ctx->rec_seq[7] == 255) {
 			/* We are about to overflow the sequence, so send a
 			 * key update.
 			 */
+
+			pr_err("*** Forcing Key update");
 
 			WRITE_ONCE(rx_ctx->key_update_pending, true);
 			tls_err_abort(sk, -EBADMSG);
