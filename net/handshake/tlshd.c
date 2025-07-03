@@ -83,6 +83,16 @@ static void tls_handshake_remote_peerids(struct tls_handshake_req *treq,
 		if (i >= treq->th_num_peerids)
 			break;
 	}
+
+	u32 record_size = 0;
+	nla_for_each_attr(nla, head, len, rem) {
+		if (nla_type(nla) == HANDSHAKE_A_DONE_RECORD_SIZE) {
+			record_size = nla_get_u32(nla);
+			printk("wmk: fetched record size %d\n", record_size);
+		} else {
+			printk("wmk: record size not found");
+		}
+	}
 }
 
 /**
