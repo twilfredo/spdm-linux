@@ -319,7 +319,7 @@ tls_advance_record_sn(struct sock *sk, struct tls_prot_info *prot,
 			ctx->rec_seq[4] == 0 &&
 			ctx->rec_seq[5] == 0 &&
 			ctx->rec_seq[6] == 0 &&
-			ctx->rec_seq[7] == 255) {
+			ctx->rec_seq[7] == 30) {
 			/* We are about to overflow the sequence, so send a
 			 * key update.
 			 */
