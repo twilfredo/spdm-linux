@@ -19,6 +19,7 @@
 #include <linux/blk-mq.h>
 #include <net/busy_poll.h>
 #include <trace/events/sock.h>
+#include <uapi/linux/handshake.h>
 
 #include "nvme.h"
 #include "fabrics.h"
@@ -209,7 +210,7 @@ static int nvme_tcp_try_send(struct nvme_tcp_queue *queue);
 static int nvme_tcp_start_tls(struct nvme_ctrl *nctrl,
 			      struct nvme_tcp_queue *queue,
 			      key_serial_t pskid,
-			      bool keyupdate);
+			      handshake_key_update_type keyupdate);
 
 static inline struct nvme_tcp_ctrl *to_tcp_ctrl(struct nvme_ctrl *ctrl)
 {
@@ -1353,7 +1354,7 @@ done:
 		handshake_sk_destruct_req(queue->sock->sk);
 
 		ret = nvme_tcp_start_tls(&(queue->ctrl->ctrl),
-			queue, queue->ctrl->ctrl.tls_pskid, true);
+			queue, queue->ctrl->ctrl.tls_pskid, HANDSHAKE_KEY_UPDATE_TYPE_SEND);
 
 		if (ret < 0) {
 			dev_err(queue->ctrl->ctrl.device,
@@ -1729,7 +1730,7 @@ out_complete:
 static int nvme_tcp_start_tls(struct nvme_ctrl *nctrl,
 			      struct nvme_tcp_queue *queue,
 			      key_serial_t pskid,
-			      bool keyupdate)
+			      handshake_key_update_type keyupdate)
 {
 	int qid = nvme_tcp_queue_id(queue);
 	int ret;
@@ -1901,7 +1902,7 @@ static int nvme_tcp_alloc_queue(struct nvme_ctrl *nctrl, int qid,
 
 	/* If PSKs are configured try to start TLS */
 	if (nvme_tcp_tls_configured(nctrl) && pskid) {
-		ret = nvme_tcp_start_tls(nctrl, queue, pskid, false);
+		ret = nvme_tcp_start_tls(nctrl, queue, pskid, HANDSHAKE_KEY_UPDATE_TYPE_UNSPEC);
 		if (ret)
 			goto err_init_connect;
 	}

@@ -2734,6 +2734,7 @@ static void tls_finish_key_update(struct sock *sk, struct tls_context *tls_ctx)
 	struct tls_sw_context_rx *ctx = tls_ctx->priv_ctx_rx;
 
 	WRITE_ONCE(ctx->key_update_pending, false);
+	tls_clear_err(sk);
 	/* wake-up pre-existing poll() */
 	ctx->saved_data_ready(sk);
 }

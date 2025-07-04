@@ -41,6 +41,8 @@ struct tls_handshake_req {
 	unsigned int		th_num_peerids;
 	key_serial_t		th_peerid[5];
 
+	int			th_key_update_request;
+
 	key_serial_t		user_key_serial;
 };
 
@@ -265,6 +267,11 @@ static int tls_handshake_accept(struct handshake_req *req,
 	if (ret < 0)
 		goto out_cancel;
 
+	ret = nla_put_u32(msg, HANDSHAKE_A_ACCEPT_KEY_UPDATE_REQUEST,
+			  treq->th_key_update_request);
+	if (ret < 0)
+		goto out_cancel;
+
 	genlmsg_end(msg, hdr);
 	return genlmsg_reply(msg, info);
 
@@ -349,7 +356,7 @@ EXPORT_SYMBOL(tls_client_hello_x509);
  *   %-ENOMEM: Memory allocation failed
  */
 int tls_client_hello_psk(const struct tls_handshake_args *args, gfp_t flags,
-			 bool keyupdate)
+			 handshake_key_update_type keyupdate)
 {
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
@@ -363,10 +370,11 @@ int tls_client_hello_psk(const struct tls_handshake_args *args, gfp_t flags,
 	if (!req)
 		return -ENOMEM;
 	treq = tls_handshake_req_init(req, args);
-	if (keyupdate)
+	if (keyupdate != HANDSHAKE_KEY_UPDATE_TYPE_UNSPEC)
 		treq->th_type = HANDSHAKE_MSG_TYPE_CLIENTKEYUPDATE;
 	else
 		treq->th_type = HANDSHAKE_MSG_TYPE_CLIENTHELLO;
+	treq->th_key_update_request = keyupdate;
 	treq->th_auth_mode = HANDSHAKE_AUTH_PSK;
 	treq->th_num_peerids = args->ta_num_peerids;
 	for (i = 0; i < args->ta_num_peerids; i++)
@@ -415,7 +423,7 @@ EXPORT_SYMBOL(tls_server_hello_x509);
  *   %-ENOMEM: Memory allocation failed
  */
 int tls_server_hello_psk(const struct tls_handshake_args *args, gfp_t flags,
-			 bool keyupdate)
+			 handshake_key_update_type keyupdate)
 {
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
@@ -424,10 +432,11 @@ int tls_server_hello_psk(const struct tls_handshake_args *args, gfp_t flags,
 	if (!req)
 		return -ENOMEM;
 	treq = tls_handshake_req_init(req, args);
-	if (keyupdate)
+	if (keyupdate != HANDSHAKE_KEY_UPDATE_TYPE_UNSPEC)
 		treq->th_type = HANDSHAKE_MSG_TYPE_SERVERKEYUPDATE;
 	else
 		treq->th_type = HANDSHAKE_MSG_TYPE_SERVERHELLO;
+	treq->th_key_update_request = keyupdate;
 	treq->th_auth_mode = HANDSHAKE_AUTH_PSK;
 	treq->th_num_peerids = 1;
 	treq->th_peerid[0] = args->ta_my_peerids[0];
