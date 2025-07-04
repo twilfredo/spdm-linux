@@ -1735,7 +1735,7 @@ static int nvme_tcp_start_tls(struct nvme_ctrl *nctrl,
 			qid, ret);
 		return ret;
 	}
-	ret = wait_for_completion_interruptible_timeout(&queue->tls_complete, tmo);
+	ret = wait_for_completion_timeout(&queue->tls_complete, tmo);
 	if (ret <= 0) {
 		if (ret == 0)
 			ret = -ETIMEDOUT;

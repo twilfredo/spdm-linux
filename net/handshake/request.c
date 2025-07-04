@@ -287,8 +287,9 @@ void handshake_complete(struct handshake_req *req, unsigned int status,
 {
 	struct sock *sk = req->hr_sk;
 	struct net *net = sock_net(sk);
-
+	pr_err("wmk: handshake_complete");
 	if (!test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED, &req->hr_flags)) {
+		pr_err("wmk: handshake_complete 2");
 		trace_handshake_complete(net, req, sk, status);
 		req->hr_proto->hp_done(req, status, info);
 
@@ -314,7 +315,7 @@ bool handshake_req_cancel(struct sock *sk)
 	struct handshake_req *req;
 	struct handshake_net *hn;
 	struct net *net;
-
+	pr_err("wmk: handshake_req_cancel");
 	net = sock_net(sk);
 	req = handshake_req_hash_lookup(sk);
 	if (!req) {
@@ -331,6 +332,8 @@ bool handshake_req_cancel(struct sock *sk)
 		/* Request already completed */
 		trace_handshake_cancel_busy(net, req, sk);
 		return false;
+	} else {
+		pr_err("wmk: set HANDSHAKE_F_REQ_COMPLETED");
 	}
 
 out_true:

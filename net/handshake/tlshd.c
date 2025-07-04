@@ -88,9 +88,9 @@ static void tls_handshake_remote_peerids(struct tls_handshake_req *treq,
 	nla_for_each_attr(nla, head, len, rem) {
 		if (nla_type(nla) == HANDSHAKE_A_DONE_RECORD_SIZE) {
 			record_size = nla_get_u32(nla);
-			printk("wmk: fetched record size %d\n", record_size);
+			pr_err("wmk: fetched record size %d\n", record_size);
 		} else {
-			printk("wmk: record size not found");
+			pr_err("wmk: record size not found");
 		}
 	}
 }
@@ -105,6 +105,7 @@ static void tls_handshake_remote_peerids(struct tls_handshake_req *treq,
 static void tls_handshake_done(struct handshake_req *req,
 			       unsigned int status, struct genl_info *info)
 {
+	pr_err("wmk: tls_handshake_done");
 	struct tls_handshake_req *treq = handshake_req_private(req);
 
 	treq->th_peerid[0] = TLS_NO_PEERID;
@@ -162,7 +163,7 @@ static int tls_handshake_put_peer_identity(struct sk_buff *msg,
 					   struct tls_handshake_req *treq)
 {
 	unsigned int i;
-
+	pr_err("wmk: tls_handshake_put_peer_identity");
 	for (i = 0; i < treq->th_num_peerids; i++)
 		if (nla_put_u32(msg, HANDSHAKE_A_ACCEPT_PEER_IDENTITY,
 				treq->th_peerid[i]) < 0)
@@ -174,7 +175,7 @@ static int tls_handshake_put_certificate(struct sk_buff *msg,
 					 struct tls_handshake_req *treq)
 {
 	struct nlattr *entry_attr;
-
+	pr_err("wmk: tls_handshake_put_certificate");
 	if (treq->th_certificate == TLS_NO_CERT &&
 	    treq->th_privkey == TLS_NO_PRIVKEY)
 		return 0;
@@ -210,7 +211,7 @@ static int tls_handshake_accept(struct handshake_req *req,
 	struct nlmsghdr *hdr;
 	struct sk_buff *msg;
 	int ret;
-
+	pr_err("wmk: tls_handshake_accept");
 	ret = tls_handshake_private_keyring(treq);
 	if (ret < 0)
 		goto out;
@@ -290,7 +291,7 @@ int tls_client_hello_anon(const struct tls_handshake_args *args, gfp_t flags)
 {
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
-
+	pr_err("wmk: tls_client_hello_anon");
 	req = handshake_req_alloc(&tls_handshake_proto, flags);
 	if (!req)
 		return -ENOMEM;
@@ -316,7 +317,7 @@ int tls_client_hello_x509(const struct tls_handshake_args *args, gfp_t flags)
 {
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
-
+	pr_err("wmk: tls_client_hello_x509");
 	req = handshake_req_alloc(&tls_handshake_proto, flags);
 	if (!req)
 		return -ENOMEM;
@@ -346,7 +347,7 @@ int tls_client_hello_psk(const struct tls_handshake_args *args, gfp_t flags)
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
 	unsigned int i;
-
+	pr_err("wmk: tls_client_hello_psk");
 	if (!args->ta_num_peerids ||
 	    args->ta_num_peerids > ARRAY_SIZE(treq->th_peerid))
 		return -EINVAL;
@@ -379,7 +380,7 @@ int tls_server_hello_x509(const struct tls_handshake_args *args, gfp_t flags)
 {
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
-
+	pr_err("wmk: tls_server_hello_x509");
 	req = handshake_req_alloc(&tls_handshake_proto, flags);
 	if (!req)
 		return -ENOMEM;
@@ -407,7 +408,7 @@ int tls_server_hello_psk(const struct tls_handshake_args *args, gfp_t flags)
 {
 	struct tls_handshake_req *treq;
 	struct handshake_req *req;
-
+	pr_err("wmk: tls_server_hello_psk");
 	req = handshake_req_alloc(&tls_handshake_proto, flags);
 	if (!req)
 		return -ENOMEM;
@@ -434,6 +435,7 @@ EXPORT_SYMBOL(tls_server_hello_psk);
  */
 bool tls_handshake_cancel(struct sock *sk)
 {
+	pr_err("wmk: tls_handshake_cancel");
 	return handshake_req_cancel(sk);
 }
 EXPORT_SYMBOL(tls_handshake_cancel);
@@ -446,7 +448,7 @@ EXPORT_SYMBOL(tls_handshake_cancel);
 void tls_handshake_close(struct socket *sock)
 {
 	struct handshake_req *req;
-
+	pr_err("wmk: tls_handshake_close");
 	req = handshake_req_hash_lookup(sock->sk);
 	if (!req)
 		return;

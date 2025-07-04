@@ -89,6 +89,7 @@ EXPORT_SYMBOL(handshake_genl_put);
 
 int handshake_nl_accept_doit(struct sk_buff *skb, struct genl_info *info)
 {
+	pr_err("wmk: handshake_nl_accept_doit");
 	struct net *net = sock_net(skb->sk);
 	struct handshake_net *hn = handshake_pernet(net);
 	struct handshake_req *req = NULL;
@@ -96,38 +97,47 @@ int handshake_nl_accept_doit(struct sk_buff *skb, struct genl_info *info)
 	int class, fd, err;
 
 	err = -EOPNOTSUPP;
-	if (!hn)
+	if (!hn) {
+		pr_err("wmk: handshake_nl_accept_doit 1");
 		goto out_status;
+	}
 
 	err = -EINVAL;
-	if (GENL_REQ_ATTR_CHECK(info, HANDSHAKE_A_ACCEPT_HANDLER_CLASS))
+	if (GENL_REQ_ATTR_CHECK(info, HANDSHAKE_A_ACCEPT_HANDLER_CLASS)) {
+		pr_err("wmk: handshake_nl_accept_doit 2");
 		goto out_status;
+	}
 	class = nla_get_u32(info->attrs[HANDSHAKE_A_ACCEPT_HANDLER_CLASS]);
 
 	err = -EAGAIN;
 	req = handshake_req_next(hn, class);
-	if (!req)
+	if (!req) {
+		pr_err("wmk: handshake_nl_accept_doit 3");
 		goto out_status;
-
+	}
 	sock = req->hr_sk->sk_socket;
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
 		err = fd;
+		pr_err("wmk: handshake_nl_accept_doit 4");
 		goto out_complete;
 	}
 
 	err = req->hr_proto->hp_accept(req, info, fd);
 	if (err) {
 		put_unused_fd(fd);
+		pr_err("wmk: handshake_nl_accept_doit 5");
 		goto out_complete;
 	}
 
 	fd_install(fd, get_file(sock->file));
 
 	trace_handshake_cmd_accept(net, req, req->hr_sk, fd);
+	pr_err("wmk: handshake_nl_accept_doit");
 	return 0;
 
 out_complete:
+pr_err("wmk: handshake_nl_accept_doit 6");
 	handshake_complete(req, -EIO, NULL);
 out_status:
 	trace_handshake_cmd_accept_err(net, req, NULL, err);
@@ -136,21 +146,26 @@ out_status:
 
 int handshake_nl_done_doit(struct sk_buff *skb, struct genl_info *info)
 {
+	pr_err("wmk: handshake_nl_done_doit 1");
 	struct net *net = sock_net(skb->sk);
 	struct handshake_req *req;
 	struct socket *sock;
 	int fd, status, err;
 
-	if (GENL_REQ_ATTR_CHECK(info, HANDSHAKE_A_DONE_SOCKFD))
+	if (GENL_REQ_ATTR_CHECK(info, HANDSHAKE_A_DONE_SOCKFD)) {
+		pr_err("wmk: handshake_nl_done_doit 2");
 		return -EINVAL;
+	}
 	fd = nla_get_s32(info->attrs[HANDSHAKE_A_DONE_SOCKFD]);
 
 	sock = sockfd_lookup(fd, &err);
-	if (!sock)
+	if (!sock) {
+		pr_err("wmk: handshake_nl_done_doit 2");
 		return err;
-
+	}
 	req = handshake_req_hash_lookup(sock->sk);
 	if (!req) {
+		pr_err("wmk: handshake_nl_done_doit 3");
 		err = -EBUSY;
 		trace_handshake_cmd_done_err(net, req, sock->sk, err);
 		sockfd_put(sock);
@@ -162,7 +177,7 @@ int handshake_nl_done_doit(struct sk_buff *skb, struct genl_info *info)
 	status = -EIO;
 	if (info->attrs[HANDSHAKE_A_DONE_STATUS])
 		status = nla_get_u32(info->attrs[HANDSHAKE_A_DONE_STATUS]);
-
+	pr_err("wmk: handshake_nl_done_doit 4");
 	handshake_complete(req, status, info);
 	sockfd_put(sock);
 	return 0;
@@ -197,7 +212,7 @@ static void __net_exit handshake_net_exit(struct net *net)
 	struct handshake_net *hn = net_generic(net, handshake_net_id);
 	struct handshake_req *req;
 	LIST_HEAD(requests);
-
+	pr_err("handshake_net_exit");
 	/*
 	 * Drain the net's pending list. Requests that have been
 	 * accepted and are in progress will be destroyed when
