@@ -26,7 +26,8 @@
 
 struct tls_handshake_req {
 	void			(*th_consumer_done)(void *data, int status,
-						    key_serial_t peerid);
+						    key_serial_t peerid,
+						    ssize_t tls_max_record_size);
 	void			*th_consumer_data;
 
 	int			th_type;
@@ -39,6 +40,8 @@ struct tls_handshake_req {
 
 	unsigned int		th_num_peerids;
 	key_serial_t		th_peerid[5];
+
+	size_t			max_record_size;
 };
 
 static struct tls_handshake_req *
@@ -55,6 +58,7 @@ tls_handshake_req_init(struct handshake_req *req,
 	treq->th_num_peerids = 0;
 	treq->th_certificate = TLS_NO_CERT;
 	treq->th_privkey = TLS_NO_PRIVKEY;
+	treq->max_record_size = TLS_NO_RECORD_SIZE_LIMIT;
 	return treq;
 }
 
@@ -84,13 +88,11 @@ static void tls_handshake_remote_peerids(struct tls_handshake_req *treq,
 			break;
 	}
 
-	u32 record_size = 0;
 	nla_for_each_attr(nla, head, len, rem) {
 		if (nla_type(nla) == HANDSHAKE_A_DONE_RECORD_SIZE) {
-			record_size = nla_get_u32(nla);
-			pr_err("wmk: fetched record size %d\n", record_size);
-		} else {
-			pr_err("wmk: record size not found");
+			treq->max_record_size = nla_get_u32(nla);
+			pr_err("wmk: fetched record size %zd\n", treq->max_record_size);
+			break;
 		}
 	}
 }
@@ -116,7 +118,7 @@ static void tls_handshake_done(struct handshake_req *req,
 		set_bit(HANDSHAKE_F_REQ_SESSION, &req->hr_flags);
 
 	treq->th_consumer_done(treq->th_consumer_data, -status,
-			       treq->th_peerid[0]);
+			       treq->th_peerid[0], treq->max_record_size);
 }
 
 #if IS_ENABLED(CONFIG_KEYS)

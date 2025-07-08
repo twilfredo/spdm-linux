@@ -174,6 +174,7 @@ struct nvme_tcp_queue {
 	__le32			recv_ddgst;
 	struct completion       tls_complete;
 	int                     tls_err;
+	u32                     tls_max_record_size;
 	struct page_frag_cache	pf_cache;
 
 	void (*state_change)(struct sock *);
@@ -1461,7 +1462,7 @@ static int nvme_tcp_init_connection(struct nvme_tcp_queue *queue)
 	struct msghdr msg = {};
 	struct kvec iov;
 	bool ctrl_hdgst, ctrl_ddgst;
-	u32 maxh2cdata;
+	u32 maxh2cdata, max_data, tls_max_record_size;
 	int ret;
 
 	icreq = kzalloc(sizeof(*icreq), GFP_KERNEL);
@@ -1567,13 +1568,19 @@ static int nvme_tcp_init_connection(struct nvme_tcp_queue *queue)
 		goto free_icresp;
 	}
 
-	maxh2cdata = le32_to_cpu(icresp->maxdata);
+	max_data = le32_to_cpu(icresp->maxdata);
+	tls_max_record_size = round_down(queue->tls_max_record_size, 4);
+
+	/* Do not exceed the endpoint tls max record size, if specified */
+	maxh2cdata = (queue->tls_max_record_size > 0) ? min(max_data, tls_max_record_size) : max_data;
 	if ((maxh2cdata % 4) || (maxh2cdata < NVME_TCP_MIN_MAXH2CDATA)) {
 		pr_err("queue %d: invalid maxh2cdata returned %u\n",
 		       nvme_tcp_queue_id(queue), maxh2cdata);
 		goto free_icresp;
 	}
 	queue->maxh2cdata = maxh2cdata;
+	pr_err("##queue %d: set maxh2cdata to %u\n",
+	       nvme_tcp_queue_id(queue), queue->maxh2cdata);
 
 	ret = 0;
 free_icresp:
@@ -1673,7 +1680,8 @@ out:
 		qid, queue->io_cpu);
 }
 
-static void nvme_tcp_tls_done(void *data, int status, key_serial_t pskid)
+static void nvme_tcp_tls_done(void *data, int status, key_serial_t pskid,
+		ssize_t tls_max_record_size)
 {
 	struct nvme_tcp_queue *queue = data;
 	struct nvme_tcp_ctrl *ctrl = queue->ctrl;
@@ -1699,6 +1707,15 @@ static void nvme_tcp_tls_done(void *data, int status, key_serial_t pskid)
 			ctrl->ctrl.tls_pskid = key_serial(tls_key);
 		key_put(tls_key);
 		queue->tls_err = 0;
+
+		/* PDUs must be lower than endpoint specified tls_max_record_size */
+		if (tls_max_record_size > 0 && tls_max_record_size < NVME_TCP_MIN_MAXH2CDATA) {
+			pr_err("##queue %d: invalid maxh2cdata returned %zd\n",
+			       nvme_tcp_queue_id(queue), tls_max_record_size);
+			queue->tls_err = -EOPNOTSUPP;
+			goto out_complete;
+		}
+		queue->tls_max_record_size = tls_max_record_size;
 	}
 
 out_complete:
