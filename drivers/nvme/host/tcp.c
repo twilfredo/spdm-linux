@@ -1578,7 +1578,7 @@ static int nvme_tcp_init_connection(struct nvme_tcp_queue *queue)
 		       nvme_tcp_queue_id(queue), maxh2cdata);
 		goto free_icresp;
 	}
-	queue->maxh2cdata = maxh2cdata;
+	queue->maxh2cdata = le32_to_cpu(icresp->maxdata);
 	pr_err("##queue %d: set maxh2cdata to %u\n",
 	       nvme_tcp_queue_id(queue), queue->maxh2cdata);
 
@@ -1684,6 +1684,7 @@ static void nvme_tcp_tls_done(void *data, int status, key_serial_t pskid,
 		ssize_t tls_max_record_size)
 {
 	struct nvme_tcp_queue *queue = data;
+	struct tls_context *tls_ctx = tls_get_ctx(queue->sock->sk);
 	struct nvme_tcp_ctrl *ctrl = queue->ctrl;
 	int qid = nvme_tcp_queue_id(queue);
 	struct key *tls_key;
@@ -1710,11 +1711,12 @@ static void nvme_tcp_tls_done(void *data, int status, key_serial_t pskid,
 
 		/* PDUs must be lower than endpoint specified tls_max_record_size */
 		if (tls_max_record_size > 0 && tls_max_record_size < NVME_TCP_MIN_MAXH2CDATA) {
-			pr_err("##queue %d: invalid maxh2cdata returned %zd\n",
+			pr_err("queue %d: invalid maxh2cdata returned %zd\n",
 			       nvme_tcp_queue_id(queue), tls_max_record_size);
 			queue->tls_err = -EOPNOTSUPP;
 			goto out_complete;
 		}
+		tls_ctx->tls_max_record_size = tls_max_record_size;
 		queue->tls_max_record_size = tls_max_record_size;
 	}
 
