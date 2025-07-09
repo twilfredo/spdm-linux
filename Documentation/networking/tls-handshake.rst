@@ -169,7 +169,7 @@ The synopsis of this function is:
 .. code-block:: c
 
   typedef void	(*tls_done_func_t)(void *data, int status,
-                                   key_serial_t peerid);
+                                   key_serial_t peerid, ssize_t tls_max_record_size);
 
 The consumer provides a cookie in the @ta_data field of the
 tls_handshake_args structure that is returned in the @data parameter of
@@ -199,6 +199,11 @@ parameter:
 The @peerid parameter contains the serial number of a key containing the
 remote peer's identity or the value TLS_NO_PEERID if the session is not
 authenticated.
+
+The @tls_max_record_size parameter, if positive, exposes the tls max record
+size advertised by the endpoint. Record size must not exceed this amount.
+A negative value shall indicate that the endpoint did not advertise the
+maximum record size limit.
 
 A best practice is to close and destroy the socket immediately if the
 handshake failed.
