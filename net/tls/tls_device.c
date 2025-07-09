@@ -427,6 +427,7 @@ static int tls_push_data(struct sock *sk,
 	int tls_push_record_flags;
 	struct page_frag *pfrag;
 	size_t orig_size = size;
+	u32 tls_max_record_size;
 	u32 max_open_record_len;
 	bool more = false;
 	bool done = false;
@@ -456,10 +457,12 @@ static int tls_push_data(struct sock *sk,
 
 	pfrag = sk_page_frag(sk);
 
+	tls_max_record_size = (tls_ctx->tls_max_record_size > 0) ? tls_ctx->tls_max_record_size : TLS_MAX_PAYLOAD_SIZE;
+	pr_err("!!wmk: tks_device: tls_max_record_size: %u", tls_max_record_size);
 	/* TLS_HEADER_SIZE is not counted as part of the TLS record, and
 	 * we need to leave room for an authentication tag.
 	 */
-	max_open_record_len = TLS_MAX_PAYLOAD_SIZE +
+	max_open_record_len = tls_max_record_size +
 			      prot->prepend_size;
 	do {
 		rc = tls_do_allocation(sk, ctx, pfrag, prot->prepend_size);

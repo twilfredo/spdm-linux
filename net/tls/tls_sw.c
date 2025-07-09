@@ -1787,6 +1787,8 @@ static int tls_rx_one_record(struct sock *sk, struct msghdr *msg,
 	rxm = strp_msg(darg->skb);
 	rxm->offset += prot->prepend_size;
 	rxm->full_len -= prot->overhead_size;
+	pr_err("wmk: TLS record payload len = %u (full wire len = %u)\n",
+         rxm->full_len, rxm->full_len + prot->overhead_size);
 	tls_advance_record_sn(sk, prot, &tls_ctx->rx);
 
 	return tls_check_pending_rekey(sk, tls_ctx, darg->skb);
