@@ -1072,10 +1072,13 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 		if (try_to_copy >= record_room) {
 			try_to_copy = record_room;
 			full_record = true;
+			pr_err("full_record!");
 		}
 
 		required_size = msg_pl->sg.size + try_to_copy +
 				prot->overhead_size;
+		pr_err("wmk: rr: %d | tmrs: %u | sgs: %u | try_to_cpy: %d",
+			record_room, tls_max_record_size, msg_pl->sg.size, try_to_copy);
 
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_sndbuf;
