@@ -1784,6 +1784,7 @@ static void nvmet_tcp_tls_handshake_done(void *data, int status,
 					ssize_t tls_record_size_limit)
 {
 	struct nvmet_tcp_queue *queue = data;
+	struct tls_context *tls_ctx = tls_get_ctx(queue->sock->sk);
 
 	pr_debug("queue %d: TLS handshake done, key %x, status %d\n",
 		 queue->idx, peerid, status);
@@ -1808,6 +1809,17 @@ static void nvmet_tcp_tls_handshake_done(void *data, int status,
 		nvmet_tcp_schedule_release_queue(queue);
 	else
 		nvmet_tcp_set_queue_sock(queue);
+
+	/* Endpoint has specified a maximum tls record size limit */
+	if (tls_record_size_limit > 0) {
+		tls_ctx->tls_record_size_limit = (u32)tls_record_size_limit;
+		pr_debug("queue %d: host specified tls max record size %u\n",
+			 queue->idx, tls_ctx->tls_record_size_limit);
+	} else {
+		pr_debug("queue %d: tls max record size limit unspecified\n",
+			 queue->idx);
+	}
+
 	kref_put(&queue->kref, nvmet_tcp_release_queue);
 }
 
