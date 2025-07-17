@@ -1354,7 +1354,7 @@ done:
 		handshake_sk_destruct_req(queue->sock->sk);
 
 		ret = nvme_tcp_start_tls(&(queue->ctrl->ctrl),
-			queue, queue->ctrl->ctrl.tls_pskid, HANDSHAKE_KEY_UPDATE_TYPE_SEND);
+			queue, queue->ctrl->ctrl.tls_pskid, HANDSHAKE_KEY_UPDATE_TYPE_SEND_REQUEST_UPDATE);
 
 		if (ret < 0) {
 			dev_err(queue->ctrl->ctrl.device,
