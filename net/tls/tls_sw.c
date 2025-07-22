@@ -181,6 +181,8 @@ static int tls_padding_length(struct tls_prot_info *prot, struct sk_buff *skb,
 		}
 		tlm->control = content_type;
 	}
+
+	pr_info("tls_padding_length: zero-padding of %d octets | content_type: %d", sub, tlm->control);
 	return sub;
 }
 
@@ -380,6 +382,8 @@ static struct tls_rec *tls_get_rec(struct sock *sk)
 	sg_set_buf(&rec->sg_aead_out[0], rec->aad_space, prot->aad_size);
 	sg_unmark_end(&rec->sg_aead_out[1]);
 
+	sg_init_table(&rec->sg_content_type, 1);
+
 	rec->sk = sk;
 
 	return rec;
@@ -389,6 +393,9 @@ static void tls_free_rec(struct sock *sk, struct tls_rec *rec)
 {
 	sk_msg_free(sk, &rec->msg_encrypted);
 	sk_msg_free(sk, &rec->msg_plaintext);
+	if (rec->padding_buf)
+		kfree(rec->padding_buf);
+
 	kfree(rec);
 }
 
@@ -430,6 +437,9 @@ int tls_tx_records(struct sock *sk, int flags)
 		 */
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
+
 		kfree(rec);
 	}
 
@@ -450,6 +460,9 @@ int tls_tx_records(struct sock *sk, int flags)
 
 			list_del(&rec->list);
 			sk_msg_free(sk, &rec->msg_plaintext);
+			if (rec->padding_buf)
+				kfree(rec->padding_buf);
+
 			kfree(rec);
 		} else {
 			break;
@@ -594,6 +607,8 @@ static int tls_do_encryption(struct sock *sk,
 		WRITE_ONCE(rec->tx_ready, true);
 	} else if (rc != -EINPROGRESS) {
 		list_del(&rec->list);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
 		return rc;
 	}
 
@@ -718,6 +733,8 @@ static void tls_merge_open_record(struct sock *sk, struct tls_rec *to,
 	sk_msg_free(sk, &to->msg_encrypted);
 	sk_msg_xfer_full(&to->msg_encrypted, &from->msg_encrypted);
 
+	if (from->padding_buf)
+		kfree(from->padding_buf);
 	kfree(from);
 }
 
@@ -780,11 +797,24 @@ static int tls_push_record(struct sock *sk, int flags,
 
 	rec->content_type = record_type;
 	if (prot->version == TLS_1_3_VERSION) {
-		/* Add content type to end of message.  No padding added */
-		sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
-		sg_mark_end(&rec->sg_content_type);
-		sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
-			 &rec->sg_content_type);
+		if (rec->padding_len > prot->tail_size) {
+			rec->padding_buf[0] = rec->content_type;
+			sg_set_buf(&rec->sg_content_type,
+				   rec->padding_buf,
+				   rec->padding_len);
+			sg_mark_end(&rec->sg_content_type);
+			sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+				 &rec->sg_content_type);
+
+			pr_info("Attached zero padded buffer of: %d octets to ContentType: %d",
+				 rec->padding_len, rec->padding_buf[0]);
+		} else {
+			/* Add content type to end of message.  No padding added */
+			sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
+			sg_mark_end(&rec->sg_content_type);
+			sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+				 &rec->sg_content_type);
+		}
 	} else {
 		sg_mark_end(sk_msg_elem(msg_pl, i));
 	}
@@ -805,19 +835,24 @@ static int tls_push_record(struct sock *sk, int flags,
 	i = msg_en->sg.start;
 	sg_chain(rec->sg_aead_out, 2, &msg_en->sg.data[i]);
 
-	tls_make_aad(rec->aad_space, msg_pl->sg.size + prot->tail_size,
+	/* For TLS 1.3 with padding: rec->padding_len includes ContentType byte
+	 * For TLS 1.3 without padding: rec->padding_len is 0, add prot->tail_size
+	 * For TLS 1.2: rec->padding_len is 0, prot->tail_size is 0
+	 */
+	tls_make_aad(rec->aad_space,
+		     msg_pl->sg.size + (rec->padding_len ? rec->padding_len : prot->tail_size),
 		     tls_ctx->tx.rec_seq, record_type, prot);
 
 	tls_fill_prepend(tls_ctx,
 			 page_address(sg_page(&msg_en->sg.data[i])) +
 			 msg_en->sg.data[i].offset,
-			 msg_pl->sg.size + prot->tail_size,
+			 msg_pl->sg.size + (rec->padding_len ? rec->padding_len : prot->tail_size),
 			 record_type);
 
 	tls_ctx->pending_open_record_frags = false;
 
 	rc = tls_do_encryption(sk, tls_ctx, ctx, req,
-			       msg_pl->sg.size + prot->tail_size, i);
+			       msg_pl->sg.size + (rec->padding_len ? rec->padding_len : prot->tail_size), i);
 	if (rc < 0) {
 		if (rc != -EINPROGRESS) {
 			tls_err_abort(sk, -EBADMSG);
@@ -1085,8 +1120,53 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 			full_record = true;
 		}
 
-		required_size = msg_pl->sg.size + try_to_copy +
-				prot->overhead_size;
+		/* Maximum amount of zero padding we can afford to do
+		 * record_room includes space for ContentType (prot->tail_size),
+		 * so subtract it to get the actual padding space available
+		 *
+		 * Only supported in TLS 1.3
+		 * Only pad complete records (eor = true), not partial records
+		 * that will have more data added later.
+		 */
+		 if (prot->version == TLS_1_3_VERSION && eor)
+			rec->padding_len = full_record ? 0 : (record_room - try_to_copy);
+		else
+			rec->padding_len = 0;
+
+		if (rec->padding_len > prot->tail_size) {
+			/* We have room for ContentType + zero padding
+			 * Randomize the total length (ContentType + padding zeros)
+			 */
+			rec->padding_len = get_random_u32_inclusive(prot->tail_size + 1, rec->padding_len);
+			/* TLSInnerPlaintext: ContentType + zero padding
+			 * The buffer layout is: [ContentType (1 byte)][zeros (padding_len - 1 bytes)]
+			 * Note: rec->padding_len includes the ContentType byte
+			 * Free any existing buffer from previous iteration before allocating new one
+			 */
+			if (rec->padding_buf)
+				kfree(rec->padding_buf);
+			rec->padding_buf = kzalloc(rec->padding_len, sk->sk_allocation);
+			if (!rec->padding_buf) {
+				pr_err("Failed to allocated padding buffer of size: %d", rec->padding_len);
+				/* Disable zero padding for this record */
+				rec->padding_len = 0;
+			}
+		} else {
+			/* Not enough space for padding beyond ContentType
+			 * Free any existing padding buffer from previous iteration
+			 */
+			if (rec->padding_buf) {
+				kfree(rec->padding_buf);
+				rec->padding_buf = NULL;
+			}
+			rec->padding_len = 0;
+		}
+
+		/* When padding is used, rec->padding_len includes ContentType byte,
+		 * so subtract prot->tail_size from overhead_size to avoid double-counting
+		 */
+		required_size = msg_pl->sg.size + try_to_copy + prot->overhead_size +
+				(rec->padding_len ? rec->padding_len - prot->tail_size : 0);
 
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_sndbuf;
@@ -1103,6 +1183,11 @@ alloc_encrypted:
 			 */
 			try_to_copy -= required_size - msg_en->sg.size;
 			full_record = true;
+			rec->padding_len = 0;
+			if (rec->padding_buf) {
+				kfree(rec->padding_buf);
+				rec->padding_buf = NULL;
+			}
 		}
 
 		if (try_to_copy && (msg->msg_flags & MSG_SPLICE_PAGES)) {
@@ -1116,6 +1201,11 @@ alloc_encrypted:
 				full_record = true;
 				sk_msg_trim(sk, msg_en,
 					    msg_pl->sg.size + prot->overhead_size);
+				rec->padding_len = 0;
+				if (rec->padding_buf) {
+					kfree(rec->padding_buf);
+					rec->padding_buf = NULL;
+				}
 			}
 
 			if (full_record || eor)
@@ -1182,6 +1272,11 @@ fallback_to_reg_send:
 			 */
 			try_to_copy -= required_size - msg_pl->sg.size;
 			full_record = true;
+			rec->padding_len = 0;
+			if (rec->padding_buf) {
+				kfree(rec->padding_buf);
+				rec->padding_buf = NULL;
+			}
 			sk_msg_trim(sk, msg_en,
 				    msg_pl->sg.size + prot->overhead_size);
 		}
@@ -2556,6 +2651,9 @@ void tls_sw_release_resources_tx(struct sock *sk)
 				       struct tls_rec, list);
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
+
 		kfree(rec);
 	}
 
@@ -2563,6 +2661,9 @@ void tls_sw_release_resources_tx(struct sock *sk)
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_encrypted);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
+
 		kfree(rec);
 	}
 
