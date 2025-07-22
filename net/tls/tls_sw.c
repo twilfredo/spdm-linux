@@ -181,6 +181,8 @@ static int tls_padding_length(struct tls_prot_info *prot, struct sk_buff *skb,
 		}
 		tlm->control = content_type;
 	}
+
+	pr_info("wmk: parsed padding of %d octets | content_type: %d", sub, tlm->control);
 	return sub;
 }
 
@@ -389,6 +391,9 @@ static void tls_free_rec(struct sock *sk, struct tls_rec *rec)
 {
 	sk_msg_free(sk, &rec->msg_encrypted);
 	sk_msg_free(sk, &rec->msg_plaintext);
+	if (rec->padding_buf)
+		kfree(rec->padding_buf);
+
 	kfree(rec);
 }
 
@@ -430,6 +435,9 @@ int tls_tx_records(struct sock *sk, int flags)
 		 */
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
+
 		kfree(rec);
 	}
 
@@ -450,6 +458,9 @@ int tls_tx_records(struct sock *sk, int flags)
 
 			list_del(&rec->list);
 			sk_msg_free(sk, &rec->msg_plaintext);
+			if (rec->padding_buf)
+				kfree(rec->padding_buf);
+
 			kfree(rec);
 		} else {
 			break;
@@ -780,11 +791,24 @@ static int tls_push_record(struct sock *sk, int flags,
 
 	rec->content_type = record_type;
 	if (prot->version == TLS_1_3_VERSION) {
-		/* Add content type to end of message.  No padding added */
-		sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
-		sg_mark_end(&rec->sg_content_type);
-		sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
-			 &rec->sg_content_type);
+		if (rec->padding_len > prot->tail_size) {
+			pr_info("wmk: record padding available, at most: %d octets", rec->padding_len);
+			rec->padding_buf[0] = rec->content_type;
+
+			sg_set_buf(&rec->sg_content_type, rec->padding_buf, rec->padding_len + prot->tail_size);
+			sg_mark_end(&rec->sg_content_type);
+			sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+				 &rec->sg_content_type);
+
+			pr_info("wmk: attached padding buffer of: %d octets | ct: %d",
+				 rec->padding_len, rec->padding_buf[0]);
+		} else {
+			/* Add content type to end of message.  No padding added */
+			sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
+			sg_mark_end(&rec->sg_content_type);
+			sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+				 &rec->sg_content_type);
+		}
 	} else {
 		sg_mark_end(sk_msg_elem(msg_pl, i));
 	}
@@ -793,6 +817,7 @@ static int tls_push_record(struct sock *sk, int flags,
 		sg_chain(&msg_pl->sg.data[msg_pl->sg.start],
 			 MAX_SKB_FRAGS - msg_pl->sg.start + 1,
 			 msg_pl->sg.data);
+		pr_err("wmk: msg_pl->sg.end < msg_pl->sg.start");
 	}
 
 	i = msg_pl->sg.start;
@@ -805,19 +830,19 @@ static int tls_push_record(struct sock *sk, int flags,
 	i = msg_en->sg.start;
 	sg_chain(rec->sg_aead_out, 2, &msg_en->sg.data[i]);
 
-	tls_make_aad(rec->aad_space, msg_pl->sg.size + prot->tail_size,
+	tls_make_aad(rec->aad_space, msg_pl->sg.size + prot->tail_size + rec->padding_len,
 		     tls_ctx->tx.rec_seq, record_type, prot);
 
 	tls_fill_prepend(tls_ctx,
 			 page_address(sg_page(&msg_en->sg.data[i])) +
 			 msg_en->sg.data[i].offset,
-			 msg_pl->sg.size + prot->tail_size,
+			 msg_pl->sg.size + prot->tail_size + rec->padding_len,
 			 record_type);
 
 	tls_ctx->pending_open_record_frags = false;
 
 	rc = tls_do_encryption(sk, tls_ctx, ctx, req,
-			       msg_pl->sg.size + prot->tail_size, i);
+			       msg_pl->sg.size + prot->tail_size + rec->padding_len, i);
 	if (rc < 0) {
 		if (rc != -EINPROGRESS) {
 			tls_err_abort(sk, -EBADMSG);
@@ -834,6 +859,7 @@ static int tls_push_record(struct sock *sk, int flags,
 		sk_msg_trim(sk, msg_en, msg_pl->sg.size + prot->overhead_size);
 		tls_ctx->pending_open_record_frags = true;
 		ctx->open_rec = tmp;
+		pr_err("wmk: split");
 	}
 
 	return tls_tx_records(sk, flags);
@@ -1079,9 +1105,26 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 			full_record = true;
 		}
 
-		required_size = msg_pl->sg.size + try_to_copy +
-				prot->overhead_size;
+		/* Maximum amount of zero padding we can afford to do */
+		pr_info("wmk: try_to_copy %zd | record_room %d", try_to_copy, record_room);
+		rec->padding_len = full_record ? 0 : record_room - try_to_copy;
+		if (rec->padding_len && ((rec->padding_len - prot->tail_size) > prot->tail_size)) {
+			pr_info("wmk: max zero pad len: %d", rec->padding_len);
+			/* Randomize padding amount */
+			rec->padding_len = get_random_u32_inclusive(1 + prot->tail_size, min(256, (u32)rec->padding_len));
+			pr_info("wmk: zero rand len: %d", rec->padding_len);
+			/* TLSInnerPlaintext: padding_buf[0]: ContentType */
+			rec->padding_buf = kzalloc(rec->padding_len + prot->tail_size, sk->sk_allocation);
+			if (!rec->padding_buf) {
+				pr_err("Failed to allocated padding buffer of size: %d", rec->padding_len);
+				/* Disable zero padding for this record */
+				rec->padding_len = 0;
+			}
+		}
 
+		required_size = msg_pl->sg.size + try_to_copy +
+				prot->overhead_size + rec->padding_len;
+		pr_info("wmk: required_size: %d", required_size);
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_sndbuf;
 
@@ -2526,6 +2569,9 @@ void tls_sw_release_resources_tx(struct sock *sk)
 				       struct tls_rec, list);
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
+
 		kfree(rec);
 	}
 
@@ -2533,6 +2579,9 @@ void tls_sw_release_resources_tx(struct sock *sk)
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_encrypted);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		if (rec->padding_buf)
+			kfree(rec->padding_buf);
+
 		kfree(rec);
 	}
 
