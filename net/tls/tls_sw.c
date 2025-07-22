@@ -181,6 +181,8 @@ static int tls_padding_length(struct tls_prot_info *prot, struct sk_buff *skb,
 		}
 		tlm->control = content_type;
 	}
+
+	pr_info("wmk: parsed padding of %d octets | content_type: %d", sub, tlm->control);
 	return sub;
 }
 
@@ -728,7 +730,9 @@ static int tls_push_record(struct sock *sk, int flags,
 	struct tls_prot_info *prot = &tls_ctx->prot_info;
 	struct tls_sw_context_tx *ctx = tls_sw_ctx_tx(tls_ctx);
 	struct tls_rec *rec = ctx->open_rec, *tmp = NULL;
-	u32 i, split_point, orig_end;
+	u8 *padding_buffer;
+	u32 i, split_point, orig_end, tls_record_size_limit;
+	int padding_length;
 	struct sk_msg *msg_pl, *msg_en;
 	struct aead_request *req;
 	bool split;
@@ -778,13 +782,44 @@ static int tls_push_record(struct sock *sk, int flags,
 	i = msg_pl->sg.end;
 	sk_msg_iter_var_prev(i);
 
+	if (tls_ctx->tls_record_size_limit > 0) {
+		tls_record_size_limit = min(tls_ctx->tls_record_size_limit,
+					    TLS_MAX_PAYLOAD_SIZE);
+	} else
+		tls_record_size_limit = TLS_MAX_PAYLOAD_SIZE;
+
 	rec->content_type = record_type;
 	if (prot->version == TLS_1_3_VERSION) {
-		/* Add content type to end of message.  No padding added */
-		sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
-		sg_mark_end(&rec->sg_content_type);
-		sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
-			 &rec->sg_content_type);
+		padding_length = tls_record_size_limit - (msg_pl->sg.size + prot->tail_size);
+		/* Able to pad atleast 1 byte or more */
+		if (padding_length > (prot->tail_size)) {
+			pr_info("wmk: record padding available, at most: %d octets", padding_length);
+			// padding_length = get_random_u32_inclusive(1, (u32)(padding_length - prot->tail_size)) + prot->tail_size;
+			padding_length = prot->tail_size;
+			padding_buffer = kzalloc(padding_length , sk->sk_allocation);
+			if (!padding_buffer) {
+				pr_err("Failed to allocated padding buffer of size: %d", prot->tail_size);
+				sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
+				sg_mark_end(&rec->sg_content_type);
+				sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+					 &rec->sg_content_type);
+			} else {
+				padding_buffer[0] = rec->content_type;
+
+				sg_set_buf(&rec->sg_content_type, padding_buffer, padding_length);
+				sg_mark_end(&rec->sg_content_type);
+				sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+					 &rec->sg_content_type);
+				pr_info("wmk: generated padding buffer of: %d octets | ct: %d",
+					 padding_length, padding_buffer[0]);
+			}
+		} else {
+			/* Add content type to end of message.  No padding added */
+			sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
+			sg_mark_end(&rec->sg_content_type);
+			sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
+				 &rec->sg_content_type);
+		}
 	} else {
 		sg_mark_end(sk_msg_elem(msg_pl, i));
 	}
@@ -793,6 +828,7 @@ static int tls_push_record(struct sock *sk, int flags,
 		sg_chain(&msg_pl->sg.data[msg_pl->sg.start],
 			 MAX_SKB_FRAGS - msg_pl->sg.start + 1,
 			 msg_pl->sg.data);
+		pr_err("wmk: msg_pl->sg.end < msg_pl->sg.start");
 	}
 
 	i = msg_pl->sg.start;
@@ -834,6 +870,7 @@ static int tls_push_record(struct sock *sk, int flags,
 		sk_msg_trim(sk, msg_en, msg_pl->sg.size + prot->overhead_size);
 		tls_ctx->pending_open_record_frags = true;
 		ctx->open_rec = tmp;
+		pr_err("wmk: split");
 	}
 
 	return tls_tx_records(sk, flags);
@@ -1086,6 +1123,7 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 			goto wait_for_sndbuf;
 
 alloc_encrypted:
+		pr_info("wmk: tls_alloc_encrypted_msg | required_size: %d", required_size);
 		ret = tls_alloc_encrypted_msg(sk, required_size);
 		if (ret) {
 			if (ret != -ENOSPC)
@@ -2714,7 +2752,8 @@ int init_prot_info(struct tls_prot_info *prot,
 	if (crypto_info->version == TLS_1_3_VERSION) {
 		nonce_size = 0;
 		prot->aad_size = TLS_HEADER_SIZE;
-		prot->tail_size = 1;
+		prot->tail_size = 32;
+		pr_info("wmk: tail_size: %d", prot->tail_size);
 	} else {
 		prot->aad_size = TLS_AAD_SPACE_SIZE;
 		prot->tail_size = 0;
