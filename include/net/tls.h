@@ -216,6 +216,7 @@ struct tls_prot_info {
 	u16 rec_seq_size;
 	u16 aad_size;
 	u16 tail_size;
+	u16 zero_padding;
 };
 
 struct tls_context {

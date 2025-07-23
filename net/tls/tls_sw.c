@@ -795,7 +795,7 @@ static int tls_push_record(struct sock *sk, int flags,
 		if (padding_length > (prot->tail_size)) {
 			pr_info("wmk: record padding available, at most: %d octets", padding_length);
 			// padding_length = get_random_u32_inclusive(1, (u32)(padding_length - prot->tail_size)) + prot->tail_size;
-			padding_length = prot->tail_size;
+			padding_length = prot->zero_padding + prot->tail_size;
 			padding_buffer = kzalloc(padding_length , sk->sk_allocation);
 			if (!padding_buffer) {
 				pr_err("Failed to allocated padding buffer of size: %d", prot->tail_size);
@@ -841,19 +841,19 @@ static int tls_push_record(struct sock *sk, int flags,
 	i = msg_en->sg.start;
 	sg_chain(rec->sg_aead_out, 2, &msg_en->sg.data[i]);
 
-	tls_make_aad(rec->aad_space, msg_pl->sg.size + prot->tail_size,
+	tls_make_aad(rec->aad_space, msg_pl->sg.size + prot->tail_size + prot->zero_padding,
 		     tls_ctx->tx.rec_seq, record_type, prot);
 
 	tls_fill_prepend(tls_ctx,
 			 page_address(sg_page(&msg_en->sg.data[i])) +
 			 msg_en->sg.data[i].offset,
-			 msg_pl->sg.size + prot->tail_size,
+			 msg_pl->sg.size + prot->tail_size + prot->zero_padding,
 			 record_type);
 
 	tls_ctx->pending_open_record_frags = false;
 
 	rc = tls_do_encryption(sk, tls_ctx, ctx, req,
-			       msg_pl->sg.size + prot->tail_size, i);
+			       msg_pl->sg.size + prot->tail_size + prot->zero_padding, i);
 	if (rc < 0) {
 		if (rc != -EINPROGRESS) {
 			tls_err_abort(sk, -EBADMSG);
@@ -1117,7 +1117,7 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 		}
 
 		required_size = msg_pl->sg.size + try_to_copy +
-				prot->overhead_size;
+				prot->overhead_size + prot->zero_padding;
 
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_sndbuf;
@@ -2752,8 +2752,7 @@ int init_prot_info(struct tls_prot_info *prot,
 	if (crypto_info->version == TLS_1_3_VERSION) {
 		nonce_size = 0;
 		prot->aad_size = TLS_HEADER_SIZE;
-		prot->tail_size = 32;
-		pr_info("wmk: tail_size: %d", prot->tail_size);
+		prot->tail_size = 1;
 	} else {
 		prot->aad_size = TLS_AAD_SPACE_SIZE;
 		prot->tail_size = 0;
@@ -2767,6 +2766,7 @@ int init_prot_info(struct tls_prot_info *prot,
 	prot->cipher_type = crypto_info->cipher_type;
 	prot->prepend_size = TLS_HEADER_SIZE + nonce_size;
 	prot->tag_size = cipher_desc->tag;
+	prot->zero_padding = 32;
 	prot->overhead_size = prot->prepend_size + prot->tag_size + prot->tail_size;
 	prot->iv_size = cipher_desc->iv;
 	prot->salt_size = cipher_desc->salt;
