@@ -1107,7 +1107,7 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 		rec->padding_len = full_record ? 0 : (record_room - try_to_copy) - prot->tail_size;
 		if (rec->padding_len > prot->tail_size + 1) {
 			/* Randomize padding amount */
-			// rec->padding_len = get_random_u32_inclusive(prot->tail_size, min(512, (u32)rec->padding_len));
+			rec->padding_len = get_random_u32_inclusive(prot->tail_size, min(512, (u32)rec->padding_len));
 			/* TLSInnerPlaintext: padding_buf[0]: ContentType */
 			rec->padding_buf = kzalloc(rec->padding_len + prot->tail_size, sk->sk_allocation);
 			if (!rec->padding_buf) {

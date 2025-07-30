@@ -1164,6 +1164,9 @@ static int nvme_tcp_try_send_data(struct nvme_tcp_request *req)
 		if (ret <= 0)
 			return ret;
 
+		if (ret < len)
+			pr_err("wmk1: ret: %d | len: %d", ret, len);
+
 		if (queue->data_digest)
 			nvme_tcp_ddgst_update(&queue->snd_crc, page,
 					offset, ret);
@@ -1190,6 +1193,8 @@ static int nvme_tcp_try_send_data(struct nvme_tcp_request *req)
 					nvme_tcp_done_send_req(queue);
 			}
 			return 1;
+		} else if (last && ret < len) {
+			pr_err("wmk22: ret: %d | len: %d", ret, len);
 		}
 	}
 	return -EAGAIN;
@@ -1258,6 +1263,9 @@ static int nvme_tcp_try_send_data_pdu(struct nvme_tcp_request *req)
 	if (unlikely(ret <= 0))
 		return ret;
 
+	if (ret < len)
+		pr_err("wmk-pdu: ret: %d | len: %d | ofst: %d ", ret, len,req->offset);
+
 	len -= ret;
 	if (!len) {
 		req->state = NVME_TCP_SEND_DATA;
@@ -1266,7 +1274,7 @@ static int nvme_tcp_try_send_data_pdu(struct nvme_tcp_request *req)
 		return 1;
 	}
 	req->offset += ret;
-
+	pr_err("wmk-pdu: EAGAIN - len: %d", req->offset);
 	return -EAGAIN;
 }
 
