@@ -43,6 +43,7 @@
 #include <crypto/aead.h>
 
 #include <net/strparser.h>
+#include <linux/ftrace.h>
 #include <net/tls.h>
 #include <trace/events/sock.h>
 
@@ -387,6 +388,7 @@ static struct tls_rec *tls_get_rec(struct sock *sk)
 
 static void tls_free_rec(struct sock *sk, struct tls_rec *rec)
 {
+	trace_printk("Dropping: TLS_REC[%llu])", rec->seq);
 	sk_msg_free(sk, &rec->msg_encrypted);
 	sk_msg_free(sk, &rec->msg_plaintext);
 	kfree(rec);
@@ -399,6 +401,7 @@ static void tls_free_open_rec(struct sock *sk)
 	struct tls_rec *rec = ctx->open_rec;
 
 	if (rec) {
+		trace_printk("Dropping: TLS_REC[%llu])", rec->seq);
 		tls_free_rec(sk, rec);
 		ctx->open_rec = NULL;
 	}
@@ -412,6 +415,8 @@ int tls_tx_records(struct sock *sk, int flags)
 	struct sk_msg *msg_en;
 	int tx_flags, rc = 0;
 
+	trace_printk("enter: partial=%d\n", tls_is_partially_sent_record(tls_ctx));
+
 	if (tls_is_partially_sent_record(tls_ctx)) {
 		rec = list_first_entry(&ctx->tx_list,
 				       struct tls_rec, list);
@@ -422,12 +427,18 @@ int tls_tx_records(struct sock *sk, int flags)
 			tx_flags = flags;
 
 		rc = tls_push_partial_record(sk, tls_ctx, tx_flags);
+		trace_printk("is_partial: TLS_REC[%llu]: pl_size=%u en_size=%u type=%u\n",
+			     rec->seq,
+			     rec->msg_plaintext.sg.size,
+			     rec->msg_encrypted.sg.size,
+			     rec->content_type);
 		if (rc)
 			goto tx_err;
 
 		/* Full record has been transmitted.
 		 * Remove the head of tx_list
 		 */
+		trace_printk("is_partial: dropping: TLS_REC[%llu]\n", rec->seq);
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
 		kfree(rec);
@@ -445,9 +456,16 @@ int tls_tx_records(struct sock *sk, int flags)
 			rc = tls_push_sg(sk, tls_ctx,
 					 &msg_en->sg.data[msg_en->sg.curr],
 					 0, tx_flags);
+			trace_printk("tx_all_rec: TLS_REC[%llu]: rc=%d pl_size=%u en_size=%u type=%u\n",
+				     rec->seq,
+				     rc,
+				     rec->msg_plaintext.sg.size,
+				     rec->msg_encrypted.sg.size,
+				     rec->content_type);
 			if (rc)
 				goto tx_err;
 
+			trace_printk("tx_all_rec: dropping: TLS_REC[%llu]\n", rec->seq);
 			list_del(&rec->list);
 			sk_msg_free(sk, &rec->msg_plaintext);
 			kfree(rec);
@@ -575,6 +593,12 @@ static int tls_do_encryption(struct sock *sk,
 				  tls_encrypt_done, rec);
 
 	/* Add the record in tx_list */
+	u64 seq_num = be64_to_cpu(*((__be64 *)tls_ctx->tx.rec_seq));
+	rec->seq = seq_num;
+	trace_printk("TLS_REC[%llu]: CREATE, pl_size+prot=%zu, en_size=%u\n",
+                 seq_num,
+                 data_len,
+                 rec->msg_encrypted.sg.size);
 	list_add_tail((struct list_head *)&rec->list, &ctx->tx_list);
 	DEBUG_NET_WARN_ON_ONCE(atomic_read(&ctx->encrypt_pending) < 1);
 	atomic_inc(&ctx->encrypt_pending);
@@ -593,6 +617,7 @@ static int tls_do_encryption(struct sock *sk,
 	if (!rc) {
 		WRITE_ONCE(rec->tx_ready, true);
 	} else if (rc != -EINPROGRESS) {
+		trace_printk("TLS_REC[%llu]: encrypt fail\n", rec->seq);
 		list_del(&rec->list);
 		return rc;
 	}
@@ -612,6 +637,9 @@ static int tls_split_open_record(struct sock *sk, struct tls_rec *from,
 	struct scatterlist *sge, *osge, *nsge;
 	u32 orig_size = msg_opl->sg.size;
 	struct scatterlist tmp = { };
+
+	trace_printk("open_rec, orig_size=%u, split_at=%u\n",
+		     orig_size, split_point);
 	struct sk_msg *msg_npl;
 	struct tls_rec *new;
 	int ret;
@@ -680,6 +708,9 @@ static int tls_split_open_record(struct sock *sk, struct tls_rec *from,
 		nsge = sk_msg_elem(msg_npl, j);
 	}
 
+	trace_printk("result, old_size=%u, new_size=%u\n",
+		     msg_opl->sg.size, msg_npl->sg.size);
+
 	msg_npl->sg.end = j;
 	msg_npl->sg.curr = j;
 	msg_npl->sg.copybreak = 0;
@@ -737,6 +768,9 @@ static int tls_push_record(struct sock *sk, int flags,
 	if (!rec)
 		return 0;
 
+	trace_printk("enter, rec_size=%u, flags=0x%x, type=%u\n",
+		     rec->msg_plaintext.sg.size, flags, record_type);
+
 	msg_pl = &rec->msg_plaintext;
 	msg_en = &rec->msg_encrypted;
 
@@ -751,6 +785,9 @@ static int tls_push_record(struct sock *sk, int flags,
 		split = true;
 		split_point = msg_en->sg.size;
 	}
+
+	if (split)
+		trace_printk("splitting record\n");
 	if (split) {
 		rc = tls_split_open_record(sk, rec, &tmp, msg_pl, msg_en,
 					   split_point, prot->overhead_size,
@@ -853,11 +890,16 @@ static int bpf_exec_tx_verdict(struct sk_msg *msg, struct sock *sk,
 	int err = 0, send;
 	u32 delta = 0;
 
+	trace_printk("enter, msg_size=%u, full_rec=%d\n",
+		     msg->sg.size, full_record);
+
 	policy = !(flags & MSG_SENDPAGE_NOPOLICY);
 	psock = sk_psock_get(sk);
 	if (!psock || !policy) {
 		err = tls_push_record(sk, flags, record_type);
+		trace_printk("err=%d sk-sk_err=%d\n", err, -sk->sk_err);
 		if (err && err != -EINPROGRESS && sk->sk_err == EBADMSG) {
+			trace_printk("socket error! EBADMSG");
 			*copied -= sk_msg_free(sk, msg);
 			tls_free_open_rec(sk);
 			err = -sk->sk_err;
@@ -896,8 +938,12 @@ more_data:
 	if (msg->apply_bytes && msg->apply_bytes < send)
 		send = msg->apply_bytes;
 
+	trace_printk("verdict=%d, send_size=%d\n",
+		     psock->eval, send);
+
 	switch (psock->eval) {
 	case __SK_PASS:
+		trace_printk("__SK_PASS");
 		err = tls_push_record(sk, flags, record_type);
 		if (err && err != -EINPROGRESS && sk->sk_err == EBADMSG) {
 			*copied -= sk_msg_free(sk, msg);
@@ -907,6 +953,7 @@ more_data:
 		}
 		break;
 	case __SK_REDIRECT:
+		trace_printk("__SK_REDIRECT");
 		redir_ingress = psock->redir_ingress;
 		sk_redir = psock->sk_redir;
 		memcpy(&msg_redir, msg, sizeof(*msg));
@@ -936,6 +983,7 @@ more_data:
 		break;
 	case __SK_DROP:
 	default:
+		trace_printk("__SK_DROP/DEF");
 		sk_msg_free_partial(sk, msg, send);
 		if (msg->apply_bytes < send)
 			msg->apply_bytes = 0;
@@ -986,6 +1034,9 @@ static int tls_sw_push_pending_record(struct sock *sk, int flags)
 	copied = msg_pl->sg.size;
 	if (!copied)
 		return 0;
+
+	trace_printk("enter, size=%u, flags=0x%x\n",
+		     (u32)copied, flags);
 
 	return bpf_exec_tx_verdict(msg_pl, sk, true, TLS_RECORD_TYPE_DATA,
 				   &copied, flags);
@@ -1087,7 +1138,8 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 
 		required_size = msg_pl->sg.size + try_to_copy +
 				prot->overhead_size;
-
+		trace_printk("enter, user_size=%lu msg_pl->sg.size=%u rec_room=%d required_size=%d full_record=%d\n",
+			      size, msg_pl->sg.size, record_room, required_size, full_record);
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_sndbuf;
 
@@ -1108,6 +1160,8 @@ alloc_encrypted:
 		if (try_to_copy && (msg->msg_flags & MSG_SPLICE_PAGES)) {
 			ret = tls_sw_sendmsg_splice(sk, msg, msg_pl,
 						    try_to_copy, &copied);
+			trace_printk("splice path used: try_to_copy=%zu, ret=%d, copied=%zd, sg.size=%u\n",
+				     try_to_copy, ret, copied, msg_pl->sg.size);
 			if (ret < 0)
 				goto send_end;
 			tls_ctx->pending_open_record_frags = true;
@@ -1115,6 +1169,8 @@ alloc_encrypted:
 			if (sk_msg_full(msg_pl))
 				full_record = true;
 
+			trace_printk("splice appended pages, full_record=%d, eor=%d\n",
+				     full_record, eor);
 			if (full_record || eor)
 				goto copied;
 			continue;
@@ -1224,6 +1280,8 @@ trim_sgl:
 	}
 
 	if (!num_async) {
+		trace_printk("exiting with num_async=0, copied=%zd, pending_open=%d\n",
+			      copied, tls_ctx->pending_open_record_frags);
 		goto send_end;
 	} else if (num_zc || eor) {
 		int err;
@@ -1243,7 +1301,13 @@ trim_sgl:
 	}
 
 send_end:
+	if (ctx->open_rec && ctx->open_rec->msg_plaintext.sg.size > 0) {
+		trace_printk("!!exit with data in open_rec, size=%u !!\n",
+			     ctx->open_rec->msg_plaintext.sg.size);
+	}
+
 	ret = sk_stream_error(sk, msg->msg_flags, ret);
+	trace_printk("tls_sw: normal exit, copied=%zd, ret(sent)=%d\n", copied, ret);
 	return copied > 0 ? copied : ret;
 }
 
@@ -2522,7 +2586,7 @@ void tls_sw_release_resources_tx(struct sock *sk)
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context_tx *ctx = tls_sw_ctx_tx(tls_ctx);
 	struct tls_rec *rec, *tmp;
-
+	trace_printk("enter\n");
 	/* Wait for any pending async encryptions to complete */
 	tls_encrypt_async_wait(ctx);
 
@@ -2535,12 +2599,14 @@ void tls_sw_release_resources_tx(struct sock *sk)
 		tls_free_partial_record(sk, tls_ctx);
 		rec = list_first_entry(&ctx->tx_list,
 				       struct tls_rec, list);
+		trace_printk("partial: dropping: TLS_REC[%llu]\n", rec->seq);
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
 		kfree(rec);
 	}
 
 	list_for_each_entry_safe(rec, tmp, &ctx->tx_list, list) {
+		trace_printk("full_recs: dropping: TLS_REC[%llu]\n", rec->seq);
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_encrypted);
 		sk_msg_free(sk, &rec->msg_plaintext);
@@ -2613,16 +2679,17 @@ static void tx_work_handler(struct work_struct *work)
 
 	if (unlikely(!tls_ctx))
 		return;
-
+	trace_printk("-- entry\n");
 	ctx = tls_sw_ctx_tx(tls_ctx);
 	if (test_bit(BIT_TX_CLOSING, &ctx->tx_bitmask))
 		return;
-
+	trace_printk("-- B\n");
 	if (!test_and_clear_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask))
 		return;
-
+	trace_printk("-- C\n");
 	if (mutex_trylock(&tls_ctx->tx_lock)) {
 		lock_sock(sk);
+		trace_printk("-- TX records\n");
 		tls_tx_records(sk, -1);
 		release_sock(sk);
 		mutex_unlock(&tls_ctx->tx_lock);
@@ -2631,6 +2698,7 @@ static void tx_work_handler(struct work_struct *work)
 		 * and cancel the work on their way out of the lock section.
 		 * Schedule a long delay just in case.
 		 */
+		trace_printk("-- rescheduling\n");
 		schedule_delayed_work(&ctx->tx_work.work, msecs_to_jiffies(10));
 	}
 }
@@ -2649,11 +2717,13 @@ static bool tls_is_tx_ready(struct tls_sw_context_tx *ctx)
 void tls_sw_write_space(struct sock *sk, struct tls_context *ctx)
 {
 	struct tls_sw_context_tx *tx_ctx = tls_sw_ctx_tx(ctx);
-
+	trace_printk("-- entry\n");
 	/* Schedule the transmission if tx list is ready */
 	if (tls_is_tx_ready(tx_ctx) &&
-	    !test_and_set_bit(BIT_TX_SCHEDULED, &tx_ctx->tx_bitmask))
+	    !test_and_set_bit(BIT_TX_SCHEDULED, &tx_ctx->tx_bitmask)) {
+		trace_printk("-- scheduling tx handler immediately\n");
 		schedule_delayed_work(&tx_ctx->tx_work.work, 0);
+	}
 }
 
 void tls_sw_strparser_arm(struct sock *sk, struct tls_context *tls_ctx)

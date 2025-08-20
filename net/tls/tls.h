@@ -112,6 +112,7 @@ struct tls_rec {
 	struct list_head list;
 	int tx_ready;
 	int tx_flags;
+	u64 seq;
 
 	struct sk_msg msg_plaintext;
 	struct sk_msg msg_encrypted;

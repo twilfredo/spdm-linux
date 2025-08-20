@@ -184,7 +184,8 @@ int tls_push_sg(struct sock *sk,
 
 	size = sg->length - offset;
 	offset += sg->offset;
-
+	trace_printk("sg->length=%d sg->offset=%d first_offset=%d offset=%d size=%zd\n",
+		      sg->length, sg->offset, first_offset, offset, size);
 	ctx->splicing_pages = true;
 	while (1) {
 		/* is sending application-limited? */
@@ -197,6 +198,7 @@ retry:
 		ret = tcp_sendmsg_locked(sk, &msg, size);
 
 		if (ret != size) {
+			trace_printk("$$ ret=%d size=%zd offset=%d\n", ret, size, offset);
 			if (ret > 0) {
 				offset += ret;
 				size -= ret;
@@ -208,6 +210,8 @@ retry:
 			ctx->partially_sent_record = (void *)sg;
 			ctx->splicing_pages = false;
 			return ret;
+		} else {
+			trace_printk("## ret=%d size=%zd offset=%d\n", ret, size, offset);
 		}
 
 		put_page(p);
@@ -221,7 +225,7 @@ retry:
 	}
 
 	ctx->splicing_pages = false;
-
+	trace_printk("!!!! send success !!!!\n");
 	return 0;
 }
 
@@ -275,18 +279,21 @@ int tls_push_partial_record(struct sock *sk, struct tls_context *ctx,
 {
 	struct scatterlist *sg;
 	u16 offset;
+	int ret;
 
 	sg = ctx->partially_sent_record;
 	offset = ctx->partially_sent_offset;
 
 	ctx->partially_sent_record = NULL;
-	return tls_push_sg(sk, ctx, sg, offset, flags);
+	ret = tls_push_sg(sk, ctx, sg, offset, flags);
+	trace_printk("Trying Partial Record: ret=%d offset=%d \n", ret, offset);
+	return ret;
 }
 
 void tls_free_partial_record(struct sock *sk, struct tls_context *ctx)
 {
 	struct scatterlist *sg;
-
+	trace_printk("enter\n");
 	for (sg = ctx->partially_sent_record; sg; sg = sg_next(sg)) {
 		put_page(sg_page(sg));
 		sk_mem_uncharge(sk, sg->length);
@@ -297,7 +304,7 @@ void tls_free_partial_record(struct sock *sk, struct tls_context *ctx)
 static void tls_write_space(struct sock *sk)
 {
 	struct tls_context *ctx = tls_get_ctx(sk);
-
+	trace_printk("-- entry: splice_pages: %d\n", ctx->splicing_pages);
 	/* If splicing_pages call lower protocol write space handler
 	 * to ensure we wake up any waiting operations there. For example
 	 * if splicing pages where to call sk_wait_event.
