@@ -1161,6 +1161,18 @@ static int nvme_tcp_try_send_data(struct nvme_tcp_request *req)
 		bvec_set_page(&bvec, page, len, offset);
 		iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, &bvec, 1, len);
 		ret = sock_sendmsg(queue->sock, &msg);
+		if (req->req.cmd) {
+			trace_printk("qid=%d cid=%d offset=%zu len=%zu ret=%d last=%d ddigest=%d h2cdata_left=%u data_sent=%ld\n",
+				     nvme_tcp_queue_id(queue),
+				     req->req.cmd->common.command_id, offset, len, ret,
+				     last, queue->data_digest, req->h2cdata_left, req->data_sent);
+		} else {
+			trace_printk("qid=%d offset=%zu len=%zu ret=%d last=%d ddigest=%d h2cdata_left=%u data_sent=%ld\n",
+				     nvme_tcp_queue_id(queue),
+				     offset, len, ret,
+				     last, queue->data_digest, req->h2cdata_left, req->data_sent);
+		}
+
 		if (ret <= 0)
 			return ret;
 
@@ -1179,6 +1191,8 @@ static int nvme_tcp_try_send_data(struct nvme_tcp_request *req)
 		/* fully successful last send in current PDU */
 		if (last && ret == len) {
 			if (queue->data_digest) {
+				trace_printk("qid=%d cid=%d fully successful last send\n",
+					     nvme_tcp_queue_id(queue), req->req.cmd->common.command_id);
 				req->ddgst =
 					nvme_tcp_ddgst_final(queue->snd_crc);
 				req->state = NVME_TCP_SEND_DDGST;
@@ -1217,6 +1231,17 @@ static int nvme_tcp_try_send_cmd_pdu(struct nvme_tcp_request *req)
 	bvec_set_virt(&bvec, (void *)pdu + req->offset, len);
 	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, &bvec, 1, len);
 	ret = sock_sendmsg(queue->sock, &msg);
+	if (req->req.cmd) {
+		trace_printk("qid=%d cid=%d len=%d ret=%d req_offset=%ld hdgst=%d inline_data=%d queue_more=%d\n",
+			      nvme_tcp_queue_id(queue), req->req.cmd->common.command_id,
+			      len, ret, req->offset, hdgst, inline_data,
+			      nvme_tcp_queue_more(queue));
+	} else {
+		trace_printk("qid=%d len=%d ret=%d req_offset=%ld hdgst=%d inline_data=%d queue_more=%d\n",
+			      nvme_tcp_queue_id(queue),
+			      len, ret, req->offset, hdgst, inline_data,
+			      nvme_tcp_queue_more(queue));
+	}
 	if (unlikely(ret <= 0))
 		return ret;
 
@@ -1255,6 +1280,8 @@ static int nvme_tcp_try_send_data_pdu(struct nvme_tcp_request *req)
 	bvec_set_virt(&bvec, (void *)pdu + req->offset, len);
 	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, &bvec, 1, len);
 	ret = sock_sendmsg(queue->sock, &msg);
+	trace_printk("qid=%d len=%u ret=%d req_offset=%ld hdgst=%d\n",
+		     nvme_tcp_queue_id(queue), len, ret, req->offset, hdgst);
 	if (unlikely(ret <= 0))
 		return ret;
 
@@ -1288,6 +1315,17 @@ static int nvme_tcp_try_send_ddgst(struct nvme_tcp_request *req)
 		msg.msg_flags |= MSG_EOR;
 
 	ret = kernel_sendmsg(queue->sock, &msg, &iov, 1, iov.iov_len);
+	if (req->req.cmd) {
+		trace_printk("qid=%d cid=%d ddgst=%d iov_len=%ld ret=%d req_offset=%ld h2cdata_left=%d queue_more=%d\n",
+			      nvme_tcp_queue_id(queue), req->req.cmd->common.command_id,
+			      req->ddgst, iov.iov_len, ret, req->offset, h2cdata_left,
+			      nvme_tcp_queue_more(queue));
+	} else {
+		trace_printk("qid=%d ddgst=%d iov_len=%ld ret=%d req_offset=%ld h2cdata_left=%d queue_more=%d\n",
+			      nvme_tcp_queue_id(queue), req->ddgst, iov.iov_len, ret,
+			      req->offset, h2cdata_left, nvme_tcp_queue_more(queue));
+	}
+
 	if (unlikely(ret <= 0))
 		return ret;
 
@@ -1315,7 +1353,7 @@ static int nvme_tcp_try_send(struct nvme_tcp_queue *queue)
 			return 0;
 	}
 	req = queue->request;
-
+	trace_printk("qid=%d state=%d\n", nvme_tcp_queue_id(queue), req->state);
 	noreclaim_flag = memalloc_noreclaim_save();
 	if (req->state == NVME_TCP_SEND_CMD_PDU) {
 		ret = nvme_tcp_try_send_cmd_pdu(req);
@@ -1341,6 +1379,7 @@ static int nvme_tcp_try_send(struct nvme_tcp_queue *queue)
 		ret = nvme_tcp_try_send_ddgst(req);
 done:
 	if (ret == -EAGAIN) {
+		trace_printk("qid=%d ret=-EAGAIN\n", nvme_tcp_queue_id(queue));
 		ret = 0;
 	} else if (ret < 0) {
 		dev_err(queue->ctrl->ctrl.device,
@@ -1366,6 +1405,8 @@ static int nvme_tcp_try_recv(struct nvme_tcp_queue *queue)
 	queue->nr_cqe = 0;
 	consumed = sock->ops->read_sock(sk, &rd_desc, nvme_tcp_recv_skb);
 	release_sock(sk);
+	trace_printk("qid=%d consumed=%d\n", nvme_tcp_queue_id(queue), consumed);
+
 	return consumed == -EAGAIN ? 0 : consumed;
 }
 
@@ -1378,6 +1419,9 @@ static void nvme_tcp_io_work(struct work_struct *w)
 	do {
 		bool pending = false;
 		int result;
+
+		trace_printk("qid=%d Doing io work\n",
+			     nvme_tcp_queue_id(queue));
 
 		if (mutex_trylock(&queue->send_mutex)) {
 			result = nvme_tcp_try_send(queue);
