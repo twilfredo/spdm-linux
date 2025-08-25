@@ -43,6 +43,7 @@
 #include <crypto/aead.h>
 
 #include <net/strparser.h>
+#include <linux/ftrace.h>
 #include <net/tls.h>
 #include <trace/events/sock.h>
 
@@ -416,6 +417,10 @@ int tls_tx_records(struct sock *sk, int flags)
 		rec = list_first_entry(&ctx->tx_list,
 				       struct tls_rec, list);
 
+		trace_printk("is_partial, pl_size=%u en_size=%u type=%u\n",
+			     rec->msg_plaintext.sg.size,
+			     rec->msg_encrypted.sg.size,
+			     rec->content_type);
 		if (flags == -1)
 			tx_flags = rec->tx_flags;
 		else
@@ -445,6 +450,11 @@ int tls_tx_records(struct sock *sk, int flags)
 			rc = tls_push_sg(sk, tls_ctx,
 					 &msg_en->sg.data[msg_en->sg.curr],
 					 0, tx_flags);
+			trace_printk("tx_all_rec: rc=%d pl_size=%u en_size=%u type=%u\n",
+				     rc,
+				     rec->msg_plaintext.sg.size,
+				     rec->msg_encrypted.sg.size,
+				     rec->content_type);
 			if (rc)
 				goto tx_err;
 
@@ -612,6 +622,9 @@ static int tls_split_open_record(struct sock *sk, struct tls_rec *from,
 	struct scatterlist *sge, *osge, *nsge;
 	u32 orig_size = msg_opl->sg.size;
 	struct scatterlist tmp = { };
+
+	trace_printk("open_rec, orig_size=%u, split_at=%u\n",
+		     orig_size, split_point);
 	struct sk_msg *msg_npl;
 	struct tls_rec *new;
 	int ret;
@@ -680,6 +693,9 @@ static int tls_split_open_record(struct sock *sk, struct tls_rec *from,
 		nsge = sk_msg_elem(msg_npl, j);
 	}
 
+	trace_printk("result, old_size=%u, new_size=%u\n",
+		     msg_opl->sg.size, msg_npl->sg.size);
+
 	msg_npl->sg.end = j;
 	msg_npl->sg.curr = j;
 	msg_npl->sg.copybreak = 0;
@@ -737,6 +753,9 @@ static int tls_push_record(struct sock *sk, int flags,
 	if (!rec)
 		return 0;
 
+	trace_printk("enter, rec_size=%u, flags=0x%x, type=%u\n",
+		     rec->msg_plaintext.sg.size, flags, record_type);
+
 	msg_pl = &rec->msg_plaintext;
 	msg_en = &rec->msg_encrypted;
 
@@ -751,6 +770,9 @@ static int tls_push_record(struct sock *sk, int flags,
 		split = true;
 		split_point = msg_en->sg.size;
 	}
+
+	if (split)
+		trace_printk("splitting record\n");
 	if (split) {
 		rc = tls_split_open_record(sk, rec, &tmp, msg_pl, msg_en,
 					   split_point, prot->overhead_size,
@@ -853,6 +875,9 @@ static int bpf_exec_tx_verdict(struct sk_msg *msg, struct sock *sk,
 	int err = 0, send;
 	u32 delta = 0;
 
+	trace_printk("enter, msg_size=%u, full_rec=%d\n",
+		     msg->sg.size, full_record);
+
 	policy = !(flags & MSG_SENDPAGE_NOPOLICY);
 	psock = sk_psock_get(sk);
 	if (!psock || !policy) {
@@ -895,6 +920,9 @@ more_data:
 	send = msg->sg.size;
 	if (msg->apply_bytes && msg->apply_bytes < send)
 		send = msg->apply_bytes;
+
+	trace_printk("verdict=%d, send_size=%d\n",
+		     psock->eval, send);
 
 	switch (psock->eval) {
 	case __SK_PASS:
@@ -986,6 +1014,9 @@ static int tls_sw_push_pending_record(struct sock *sk, int flags)
 	copied = msg_pl->sg.size;
 	if (!copied)
 		return 0;
+
+	trace_printk("enter, size=%u, flags=0x%x\n",
+		     (u32)copied, flags);
 
 	return bpf_exec_tx_verdict(msg_pl, sk, true, TLS_RECORD_TYPE_DATA,
 				   &copied, flags);
@@ -1087,7 +1118,8 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 
 		required_size = msg_pl->sg.size + try_to_copy +
 				prot->overhead_size;
-
+		trace_printk("enter, user_size=%lu msg_pl->sg.size=%u rec_room=%d required_size=%d full_record=%d\n",
+			      size, msg_pl->sg.size, record_room, required_size, full_record);
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_sndbuf;
 
@@ -1108,6 +1140,8 @@ alloc_encrypted:
 		if (try_to_copy && (msg->msg_flags & MSG_SPLICE_PAGES)) {
 			ret = tls_sw_sendmsg_splice(sk, msg, msg_pl,
 						    try_to_copy, &copied);
+			trace_printk("splice path used: try_to_copy=%zu, ret=%d, copied=%zd, sg.size=%u\n",
+				     try_to_copy, ret, copied, msg_pl->sg.size);
 			if (ret < 0)
 				goto send_end;
 			tls_ctx->pending_open_record_frags = true;
@@ -1115,6 +1149,8 @@ alloc_encrypted:
 			if (sk_msg_full(msg_pl))
 				full_record = true;
 
+			trace_printk("splice appended pages, full_record=%d, eor=%d\n",
+				     full_record, eor);
 			if (full_record || eor)
 				goto copied;
 			continue;
@@ -1224,6 +1260,8 @@ trim_sgl:
 	}
 
 	if (!num_async) {
+		trace_printk("exiting with num_async=0, copied=%zd, pending_open=%d\n",
+			      copied, tls_ctx->pending_open_record_frags);
 		goto send_end;
 	} else if (num_zc || eor) {
 		int err;
@@ -1243,6 +1281,12 @@ trim_sgl:
 	}
 
 send_end:
+	if (ctx->open_rec && ctx->open_rec->msg_plaintext.sg.size > 0) {
+		trace_printk("!!exit with data in open_rec, size=%u !!\n",
+			     ctx->open_rec->msg_plaintext.sg.size);
+	}
+	trace_printk("tls_sw: normal exit, copied=%zd, ret=%d\n", copied, ret);
+
 	ret = sk_stream_error(sk, msg->msg_flags, ret);
 	return copied > 0 ? copied : ret;
 }

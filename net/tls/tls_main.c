@@ -184,7 +184,7 @@ int tls_push_sg(struct sock *sk,
 
 	size = sg->length - offset;
 	offset += sg->offset;
-
+	trace_printk("sg->length=%d offset=%d size=%zd\n",sg->length, offset, size);
 	ctx->splicing_pages = true;
 	while (1) {
 		/* is sending application-limited? */
@@ -197,6 +197,7 @@ retry:
 		ret = tcp_sendmsg_locked(sk, &msg, size);
 
 		if (ret != size) {
+			trace_printk("$$ ret=%d size=%zd offset=%d\n", ret, size, offset);
 			if (ret > 0) {
 				offset += ret;
 				size -= ret;
@@ -208,6 +209,8 @@ retry:
 			ctx->partially_sent_record = (void *)sg;
 			ctx->splicing_pages = false;
 			return ret;
+		} else {
+			trace_printk("## ret=%d size=%zd offset=%d\n", ret, size, offset);
 		}
 
 		put_page(p);
@@ -280,6 +283,7 @@ int tls_push_partial_record(struct sock *sk, struct tls_context *ctx,
 	offset = ctx->partially_sent_offset;
 
 	ctx->partially_sent_record = NULL;
+	trace_printk("offset=%d\n", offset);
 	return tls_push_sg(sk, ctx, sg, offset, flags);
 }
 
