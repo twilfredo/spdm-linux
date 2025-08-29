@@ -1155,7 +1155,7 @@ static int nvme_tcp_try_send_data(struct nvme_tcp_request *req)
 		else
 			msg.msg_flags |= MSG_MORE;
 
-		if (!sendpages_ok(page, len, offset))
+		if (!sendpages_ok(page, len, offset) || nvme_tcp_queue_tls(queue))
 			msg.msg_flags &= ~MSG_SPLICE_PAGES;
 
 		bvec_set_page(&bvec, page, len, offset);
