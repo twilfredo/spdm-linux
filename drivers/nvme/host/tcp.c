@@ -1079,6 +1079,13 @@ static void nvme_tcp_write_space(struct sock *sk)
 
 	read_lock_bh(&sk->sk_callback_lock);
 	queue = sk->sk_user_data;
+
+	if (queue && nvme_tcp_queue_tls(queue) && sk_stream_is_writeable(sk)) {
+		trace_printk("tls write_space: %pS", queue->write_space);
+		clear_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+		queue->write_space(sk);
+	}
+
 	if (likely(queue && sk_stream_is_writeable(sk))) {
 		clear_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		queue_work_on(queue->io_cpu, nvme_tcp_wq, &queue->io_work);

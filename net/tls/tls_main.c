@@ -204,6 +204,9 @@ retry:
 				size -= ret;
 				goto retry;
 			}
+			/* We have more to send, this should arm the callback event */
+			if (ret == -EAGAIN)
+				set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 
 			offset -= sg->offset;
 			ctx->partially_sent_offset = offset;
