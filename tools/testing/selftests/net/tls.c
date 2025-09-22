@@ -24,6 +24,7 @@
 #include "../kselftest_harness.h"
 
 #define TLS_PAYLOAD_MAX_LEN 16384
+#define TLS_TX_RECORD_SIZE_LIM 5
 #define SOL_TLS 282
 
 static int fips_enabled;
@@ -2768,6 +2769,83 @@ TEST_F(tls_err, poll_partial_rec_async)
 
 		exit(!__test_passed(_metadata));
 	}
+}
+
+TEST(tx_record_size)
+{
+	struct tls_crypto_info_keys tls12;
+	int cfd, ret, fd, rx_len, overhead, rec_cnt=0;
+	uint8_t tx[1024], rx[2000];
+	uint8_t *p;
+	__u16 limit = 128;
+	bool notls;
+
+	tls_crypto_info_init(TLS_1_2_VERSION, TLS_CIPHER_AES_CCM_128,
+			     &tls12, 0);
+
+	ulp_sock_pair(_metadata, &fd, &cfd, &notls);
+
+	if (notls)
+		exit(KSFT_SKIP);
+
+	printf("\n--- Running tx_record_size test ---\n");
+	printf("Setting TLS TX record plaintext limit to: %u bytes\n", limit);
+
+	/* Don't install keys on fd, we'll parse raw records */
+	ret = setsockopt(cfd, SOL_TLS, TLS_TX, &tls12, tls12.len);
+	ASSERT_EQ(ret, 0);
+
+	ret = setsockopt(cfd, SOL_TLS, TLS_TX_RECORD_SIZE_LIM, &limit, sizeof(limit));
+	ASSERT_EQ(ret, 0);
+
+	memset(tx, 0, sizeof(tx));
+	EXPECT_EQ(send(cfd, tx, sizeof(tx), 0), sizeof(tx));
+	printf("Sent %zd bytes of plaintext data.\n", (ssize_t)sizeof(tx));
+	close(cfd);
+
+	ret = recv(fd, rx, sizeof(rx), 0);
+	memcpy(&rx_len, rx + 3, 2);
+	rx_len = htons(rx_len);
+
+	printf("Received a total of %zd raw encrypted bytes.\n", ret);
+	printf("Parsing records...\n");
+
+	/*
+	 * 16B tag + 8B IV -- record header (5B) is not counted but we'll
+	 * need it to walk the record stream
+	 */
+	overhead = 16 + 8;
+	p = rx;
+	while (p < rx + ret) {
+		__u16 record_payload_len;
+		__u16 plaintext_len;
+		rec_cnt++;
+
+		/* Sanity check that it's a TLS header for application data */
+		ASSERT_EQ(rx[0], 23);
+		ASSERT_EQ(rx[1], 0x3);
+		ASSERT_EQ(rx[2], 0x3);
+
+		memcpy(&record_payload_len, p + 3, 2);
+		record_payload_len = ntohs(record_payload_len);
+		ASSERT_GE(record_payload_len, overhead);
+		plaintext_len = record_payload_len - overhead;
+
+		printf("  Record #%-2d: Encrypted Payload Len = %-5u, Plaintext Len = %-5u -> ",
+		       rec_cnt, record_payload_len, plaintext_len);
+		if (plaintext_len <= limit)
+			printf("OK (<= %u)\n", limit);
+		else
+			printf("FAIL (> %u)\n", limit);
+		/* This is the core check: plaintext must not exceed the limit */
+		ASSERT_LE(plaintext_len, limit);
+		/* Record Header = 5 */
+		p += 5 + record_payload_len;
+	}
+
+	/* 1024B payload into records limited to 128B => 8 Records */
+	ASSERT_EQ(rec_cnt, 8);
+	close(fd);
 }
 
 TEST(non_established) {
