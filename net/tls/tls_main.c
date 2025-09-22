@@ -1167,7 +1167,6 @@ static int tls_get_info(struct sock *sk, struct sk_buff *skb, bool net_admin)
 
 	err = nla_put_u16(skb, TLS_INFO_TX_MAX_PAYLOAD_LEN,
 			  ctx->tx_max_payload_len);
-
 	if (err)
 		goto nla_failure;
 
