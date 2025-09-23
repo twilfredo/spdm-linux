@@ -2771,6 +2771,42 @@ TEST_F(tls_err, poll_partial_rec_async)
 	}
 }
 
+/*
+ * Parse a stream of TLS records and ensure that each record respects
+ * the specified @record_size_limit.
+ */
+static size_t parse_tls_records(struct __test_metadata *_metadata,
+				const __u8 *rx_buf, int rx_len, int overhead,
+				__u16 record_size_limit)
+{
+    const __u8 *rec = rx_buf;
+    size_t total_plaintext_rx = 0;
+    const __u8 rec_header_len = 5;
+
+    while (rec < rx_buf + rx_len) {
+        __u16 record_payload_len;
+        __u16 plaintext_len;
+
+        /* Sanity check that it's a TLS header for application data */
+        ASSERT_EQ(rec[0], 23);
+        ASSERT_EQ(rec[1], 0x3);
+        ASSERT_EQ(rec[2], 0x3);
+
+        memcpy(&record_payload_len, rec + 3, 2);
+        record_payload_len = ntohs(record_payload_len);
+        ASSERT_GE(record_payload_len, overhead);
+
+        plaintext_len = record_payload_len - overhead;
+        total_plaintext_rx += plaintext_len;
+
+        /* Plaintext must not exceed the specified limit */
+        ASSERT_LE(plaintext_len, record_size_limit);
+        rec += rec_header_len + record_payload_len;
+    }
+
+    return total_plaintext_rx;
+}
+
 TEST(tx_record_size)
 {
 	struct tls_crypto_info_keys tls12;
@@ -2817,27 +2853,8 @@ TEST(tx_record_size)
 	 * need it to walk the record stream
 	 */
 	overhead = 16 + 8;
-	rec = rx;
-	while (rec < rx + ret) {
-		__u16 record_payload_len;
-		__u16 plaintext_len;
-
-		/* Sanity check that it's a TLS header for application data */
-		ASSERT_EQ(rec[0], 23);
-		ASSERT_EQ(rec[1], 0x3);
-		ASSERT_EQ(rec[2], 0x3);
-
-		memcpy(&record_payload_len, rec + 3, 2);
-		record_payload_len = ntohs(record_payload_len);
-		ASSERT_GE(record_payload_len, overhead);
-
-		plaintext_len = record_payload_len - overhead;
-		total_plaintext_rx += plaintext_len;
-
-		/* Plaintext must not exceed the limit we set */
-		ASSERT_LE(plaintext_len, limit);
-		rec += rec_header_len + record_payload_len;
-	}
+	total_plaintext_rx = parse_tls_records(_metadata, rx, ret, overhead,
+					       limit);
 
 	ASSERT_EQ(total_plaintext_rx, sizeof(tx));
 	close(fd);
@@ -2851,7 +2868,7 @@ TEST(tx_record_size_open_rec)
 	__u8 tx[1024], rx[2000];
 	__u16 partial_tx_size = 256;
 	__u8 *rec;
-	__u16 limit = 512;
+	__u16 og_limit = 512, limit = 128;
 	__u8 rec_header_len = 5;
 	bool notls;
 
@@ -2867,17 +2884,21 @@ TEST(tx_record_size_open_rec)
 	ret = setsockopt(cfd, SOL_TLS, TLS_TX, &tls12, tls12.len);
 	ASSERT_EQ(ret, 0);
 
-	ret = setsockopt(cfd, SOL_TLS, TLS_TX_RECORD_SIZE_LIM, &limit,
-		         sizeof(limit));
+	ret = setsockopt(cfd, SOL_TLS, TLS_TX_RECORD_SIZE_LIM, &og_limit,
+		         sizeof(og_limit));
 	ASSERT_EQ(ret, 0);
 
 	memset(tx, 0, sizeof(tx));
 	EXPECT_EQ(send(cfd, tx, partial_tx_size, MSG_MORE), partial_tx_size);
 
-	limit = 512;
+	/*
+	 * Changing the record size limit with a pending open record should
+	 * not be allowed.
+	 */
 	ret = setsockopt(cfd, SOL_TLS, TLS_TX_RECORD_SIZE_LIM, &limit,
 			 sizeof(limit));
-	ASSERT_EQ(ret, -EBUSY);
+	ASSERT_EQ(ret, -1);
+	ASSERT_EQ(errno, EBUSY);
 
 	EXPECT_EQ(send(cfd, tx + partial_tx_size, sizeof(tx) - partial_tx_size, MSG_EOR),
 		       sizeof(tx) - partial_tx_size);
@@ -2892,28 +2913,8 @@ TEST(tx_record_size_open_rec)
 	 * need it to walk the record stream
 	 */
 	overhead = 16 + 8;
-	rec = rx;
-	while (rec < rx + ret) {
-		__u16 record_payload_len;
-		__u16 plaintext_len;
-
-		/* Sanity check that it's a TLS header for application data */
-		ASSERT_EQ(rec[0], 23);
-		ASSERT_EQ(rec[1], 0x3);
-		ASSERT_EQ(rec[2], 0x3);
-
-		memcpy(&record_payload_len, rec + 3, 2);
-		record_payload_len = ntohs(record_payload_len);
-		ASSERT_GE(record_payload_len, overhead);
-
-		plaintext_len = record_payload_len - overhead;
-		total_plaintext_rx += plaintext_len;
-
-		/* Plaintext must not exceed the limit we set */
-		ASSERT_LE(plaintext_len, limit);
-		rec += rec_header_len + record_payload_len;
-	}
-
+	total_plaintext_rx = parse_tls_records(_metadata, rx, ret, overhead,
+					       og_limit);
 	ASSERT_EQ(total_plaintext_rx, sizeof(tx));
 	close(fd);
 }
