@@ -2843,6 +2843,81 @@ TEST(tx_record_size)
 	close(fd);
 }
 
+TEST(tx_record_size_open_rec)
+{
+	struct tls_crypto_info_keys tls12;
+	int cfd, ret, fd, rx_len, overhead;
+	size_t total_plaintext_rx = 0;
+	__u8 tx[1024], rx[2000];
+	__u16 partial_tx_size = 256;
+	__u8 *rec;
+	__u16 limit = 512;
+	__u8 rec_header_len = 5;
+	bool notls;
+
+	tls_crypto_info_init(TLS_1_2_VERSION, TLS_CIPHER_AES_CCM_128,
+			     &tls12, 0);
+
+	ulp_sock_pair(_metadata, &fd, &cfd, &notls);
+
+	if (notls)
+		exit(KSFT_SKIP);
+
+	/* Don't install keys on fd, we'll parse raw records */
+	ret = setsockopt(cfd, SOL_TLS, TLS_TX, &tls12, tls12.len);
+	ASSERT_EQ(ret, 0);
+
+	ret = setsockopt(cfd, SOL_TLS, TLS_TX_RECORD_SIZE_LIM, &limit,
+		         sizeof(limit));
+	ASSERT_EQ(ret, 0);
+
+	memset(tx, 0, sizeof(tx));
+	EXPECT_EQ(send(cfd, tx, partial_tx_size, MSG_MORE), partial_tx_size);
+
+	limit = 512;
+	ret = setsockopt(cfd, SOL_TLS, TLS_TX_RECORD_SIZE_LIM, &limit,
+			 sizeof(limit));
+	ASSERT_EQ(ret, -EBUSY);
+
+	EXPECT_EQ(send(cfd, tx + partial_tx_size, sizeof(tx) - partial_tx_size, MSG_EOR),
+		       sizeof(tx) - partial_tx_size);
+	close(cfd);
+
+	ret = recv(fd, rx, sizeof(rx), 0);
+	memcpy(&rx_len, rx + 3, 2);
+	rx_len = htons(rx_len);
+
+	/*
+	 * 16B tag + 8B IV -- record header (5B) is not counted but we'll
+	 * need it to walk the record stream
+	 */
+	overhead = 16 + 8;
+	rec = rx;
+	while (rec < rx + ret) {
+		__u16 record_payload_len;
+		__u16 plaintext_len;
+
+		/* Sanity check that it's a TLS header for application data */
+		ASSERT_EQ(rec[0], 23);
+		ASSERT_EQ(rec[1], 0x3);
+		ASSERT_EQ(rec[2], 0x3);
+
+		memcpy(&record_payload_len, rec + 3, 2);
+		record_payload_len = ntohs(record_payload_len);
+		ASSERT_GE(record_payload_len, overhead);
+
+		plaintext_len = record_payload_len - overhead;
+		total_plaintext_rx += plaintext_len;
+
+		/* Plaintext must not exceed the limit we set */
+		ASSERT_LE(plaintext_len, limit);
+		rec += rec_header_len + record_payload_len;
+	}
+
+	ASSERT_EQ(total_plaintext_rx, sizeof(tx));
+	close(fd);
+}
+
 TEST(non_established) {
 	struct tls12_crypto_info_aes_gcm_256 tls12;
 	struct sockaddr_in addr;
