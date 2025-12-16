@@ -1140,7 +1140,10 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 			/* TLSInnerPlaintext: ContentType + zero padding
 			 * The buffer layout is: [ContentType (1 byte)][zeros (padding_len - 1 bytes)]
 			 * Note: rec->padding_len includes the ContentType byte
+			 * Free any existing buffer from previous iteration before allocating new one
 			 */
+			if (rec->padding_buf)
+				kfree(rec->padding_buf);
 			rec->padding_buf = kzalloc(rec->padding_len, sk->sk_allocation);
 			if (!rec->padding_buf) {
 				pr_err("Failed to allocated padding buffer of size: %d", rec->padding_len);
@@ -1148,7 +1151,13 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 				rec->padding_len = 0;
 			}
 		} else {
-			/* Not enough space for padding beyond ContentType */
+			/* Not enough space for padding beyond ContentType
+			 * Free any existing padding buffer from previous iteration
+			 */
+			if (rec->padding_buf) {
+				kfree(rec->padding_buf);
+				rec->padding_buf = NULL;
+			}
 			rec->padding_len = 0;
 		}
 
@@ -1192,6 +1201,10 @@ alloc_encrypted:
 				sk_msg_trim(sk, msg_en,
 					    msg_pl->sg.size + prot->overhead_size);
 				rec->padding_len = 0;
+				if (rec->padding_buf) {
+					kfree(rec->padding_buf);
+					rec->padding_buf = NULL;
+				}
 			}
 
 			if (full_record || eor)
@@ -1259,6 +1272,10 @@ fallback_to_reg_send:
 			try_to_copy -= required_size - msg_pl->sg.size;
 			full_record = true;
 			rec->padding_len = 0;
+			if (rec->padding_buf) {
+				kfree(rec->padding_buf);
+				rec->padding_buf = NULL;
+			}
 			sk_msg_trim(sk, msg_en,
 				    msg_pl->sg.size + prot->overhead_size);
 		}
