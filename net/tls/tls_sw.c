@@ -182,7 +182,7 @@ static int tls_padding_length(struct tls_prot_info *prot, struct sk_buff *skb,
 		tlm->control = content_type;
 	}
 
-	pr_info("tls_padding_length: zero-padding of %d octets | content_type: %d", sub, tlm->control);
+	//pr_info("tls_padding_length: zero-padding of %d octets | content_type: %d", sub, tlm->control);
 	return sub;
 }
 
@@ -806,8 +806,8 @@ static int tls_push_record(struct sock *sk, int flags,
 			sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
 				 &rec->sg_content_type);
 
-			pr_info("Attached zero padded buffer of: %d octets to ContentType: %d",
-				 rec->padding_len, rec->padding_buf[0]);
+			//pr_info("Attached zero padded buffer of: %d octets to ContentType: %d",
+			//	 rec->padding_len, rec->padding_buf[0]);
 		} else {
 			/* Add content type to end of message.  No padding added */
 			sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
