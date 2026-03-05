@@ -124,6 +124,11 @@ struct tls_rec {
 	char content_type;
 	struct scatterlist sg_content_type;
 
+	/* TLS 1.3 record zero padding */
+	uint8_t *zero_padding;
+	uint16_t zero_padding_len;
+	struct scatterlist sg_zero_padding;
+
 	struct sock *sk;
 
 	char aad_space[TLS_AAD_SPACE_SIZE];
