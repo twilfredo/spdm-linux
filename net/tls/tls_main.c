@@ -563,6 +563,30 @@ static int do_tls_getsockopt_tx_payload_len(struct sock *sk, char __user *optval
 	return 0;
 }
 
+static int do_tls_getsockopt_tx_random_pad(struct sock *sk, char __user *optval,
+					   int __user *optlen)
+{
+	struct tls_context *ctx = tls_get_ctx(sk);
+	u16 pad_limit = ctx->tx_record_zero_pad;
+	int len;
+
+	if (ctx->prot_info.version != TLS_1_3_VERSION)
+		return -EOPNOTSUPP;
+
+	if (get_user(len, optlen))
+		return -EFAULT;
+
+	if (len < sizeof(pad_limit))
+		return -EINVAL;
+
+	if (put_user(sizeof(pad_limit), optlen))
+		return -EFAULT;
+
+	if (copy_to_user(optval, &pad_limit, sizeof(pad_limit)))
+		return -EFAULT;
+
+	return 0;
+}
 static int do_tls_getsockopt(struct sock *sk, int optname,
 			     char __user *optval, int __user *optlen)
 {
@@ -584,6 +608,9 @@ static int do_tls_getsockopt(struct sock *sk, int optname,
 		break;
 	case TLS_TX_MAX_PAYLOAD_LEN:
 		rc = do_tls_getsockopt_tx_payload_len(sk, optval, optlen);
+		break;
+	case TLS_TX_RANDOM_PAD:
+		rc = do_tls_getsockopt_tx_random_pad(sk, optval, optlen);
 		break;
 	default:
 		rc = -ENOPROTOOPT;
@@ -860,6 +887,33 @@ static int do_tls_setsockopt_tx_payload_len(struct sock *sk, sockptr_t optval,
 	return 0;
 }
 
+static int do_tls_setsockopt_tx_random_pad(struct sock *sk, sockptr_t optval,
+					   unsigned int optlen)
+{
+	struct tls_context *ctx = tls_get_ctx(sk);
+	struct tls_sw_context_tx *sw_ctx = tls_sw_ctx_tx(ctx);
+	u16 value;
+
+	if (ctx->prot_info.version != TLS_1_3_VERSION)
+		return -EOPNOTSUPP;
+
+	if (sw_ctx && sw_ctx->open_rec)
+		return -EBUSY;
+
+	if (sockptr_is_null(optval) || optlen != sizeof(value))
+		return -EINVAL;
+
+	if (copy_from_sockptr(&value, optval, sizeof(value)))
+		return -EFAULT;
+
+	if (value >= ctx->tx_max_payload_len)
+		return -EINVAL;
+
+	ctx->tx_record_zero_pad = value;
+
+	return 0;
+}
+
 static int do_tls_setsockopt(struct sock *sk, int optname, sockptr_t optval,
 			     unsigned int optlen)
 {
@@ -884,6 +938,11 @@ static int do_tls_setsockopt(struct sock *sk, int optname, sockptr_t optval,
 	case TLS_TX_MAX_PAYLOAD_LEN:
 		lock_sock(sk);
 		rc = do_tls_setsockopt_tx_payload_len(sk, optval, optlen);
+		release_sock(sk);
+		break;
+	case TLS_TX_RANDOM_PAD:
+		lock_sock(sk);
+		rc = do_tls_setsockopt_tx_random_pad(sk, optval, optlen);
 		release_sock(sk);
 		break;
 	default:
@@ -1076,6 +1135,7 @@ static int tls_init(struct sock *sk)
 	ctx->tx_conf = TLS_BASE;
 	ctx->rx_conf = TLS_BASE;
 	ctx->tx_max_payload_len = TLS_MAX_PAYLOAD_SIZE;
+	ctx->tx_record_zero_pad = 0;
 	update_sk_prot(sk, ctx);
 out:
 	write_unlock_bh(&sk->sk_callback_lock);
@@ -1171,6 +1231,13 @@ static int tls_get_info(struct sock *sk, struct sk_buff *skb, bool net_admin)
 	if (err)
 		goto nla_failure;
 
+	if (version != TLS_1_3_VERSION) {
+		err = nla_put_u16(skb, TLS_INFO_TX_RANDOM_PAD,
+				  ctx->tx_record_zero_pad);
+		if (err)
+			goto nla_failure;
+	}
+
 	rcu_read_unlock();
 	nla_nest_end(skb, start);
 	return 0;
@@ -1183,6 +1250,7 @@ nla_failure:
 
 static size_t tls_get_info_size(const struct sock *sk, bool net_admin)
 {
+	struct tls_context *ctx = tls_get_ctx(sk);
 	size_t size = 0;
 
 	size += nla_total_size(0) +		/* INET_ULP_INFO_TLS */
@@ -1194,6 +1262,9 @@ static size_t tls_get_info_size(const struct sock *sk, bool net_admin)
 		nla_total_size(0) +		/* TLS_INFO_RX_NO_PAD */
 		nla_total_size(sizeof(u16)) +   /* TLS_INFO_TX_MAX_PAYLOAD_LEN */
 		0;
+
+	if (ctx->prot_info.version == TLS_1_3_VERSION)
+		size += nla_total_size(sizeof(u16)); /* TLS_INFO_TX_RANDOM_PAD */
 
 	return size;
 }
