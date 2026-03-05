@@ -780,12 +780,11 @@ static int tls_push_record(struct sock *sk, int flags,
 	sk_msg_iter_var_prev(i);
 
 	rec->content_type = record_type;
+
 	if (prot->version == TLS_1_3_VERSION) {
-		/*
-		 * Add content type to end of message with zero padding if
-		 * enabled
-		 */
-		sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
+		/* Add content type to end of message with optional padding */
+		sg_init_table(rec->sg_content_trail, 2);
+		sg_set_buf(&rec->sg_content_trail[0], &rec->content_type, 1);
 		pr_info("A#: Zero padding of %u bytes\n", rec->zero_padding_len);
 		if (rec->zero_padding_len) {
 			rec->zero_padding = kzalloc(rec->zero_padding_len,
@@ -793,21 +792,18 @@ static int tls_push_record(struct sock *sk, int flags,
 			if (!rec->zero_padding)
 				return -ENOMEM;
 
-			sg_set_buf(&rec->sg_zero_padding,
-				   rec->zero_padding,
-				   rec->zero_padding_len);
-			sg_mark_end(&rec->sg_zero_padding);
-			sg_chain(&rec->sg_content_type, 2,
-				 &rec->sg_zero_padding);
-
+			sg_set_buf(&rec->sg_content_trail[1],
+					rec->zero_padding,
+					rec->zero_padding_len);
+			sg_mark_end(&rec->sg_content_trail[1]);
 			pr_info("B#: Adding zero padding of %u bytes\n",
 				rec->zero_padding_len);
 		} else {
-			sg_mark_end(&rec->sg_content_type);
+			sg_mark_end(&rec->sg_content_trail[0]);
 		}
 
 		sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
-			 &rec->sg_content_type);
+				rec->sg_content_trail);
 	} else {
 		sg_mark_end(sk_msg_elem(msg_pl, i));
 	}

@@ -121,13 +121,12 @@ struct tls_rec {
 	/* AAD | msg_encrypted.sg.data (data contains overhead for hdr & iv & tag) */
 	struct scatterlist sg_aead_out[2];
 
-	char content_type;
-	struct scatterlist sg_content_type;
-
 	/* TLS 1.3 record zero padding */
-	uint8_t *zero_padding;
+	char *zero_padding;
 	uint16_t zero_padding_len;
-	struct scatterlist sg_zero_padding;
+
+	char content_type;
+	struct scatterlist sg_content_trail[2];
 
 	struct sock *sk;
 
