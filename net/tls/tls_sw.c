@@ -786,17 +786,26 @@ static int tls_push_record(struct sock *sk, int flags,
 		 * enabled
 		 */
 		sg_set_buf(&rec->sg_content_type, &rec->content_type, 1);
-		if (rec->zero_padding_len && rec->zero_padding) {
-			sg_set_buf(&rec->sg_zero_padding, rec->zero_padding,
+		pr_info("A#: Zero padding of %u bytes\n", rec->zero_padding_len);
+		if (rec->zero_padding_len) {
+			rec->zero_padding = kzalloc(rec->zero_padding_len,
+						    sk->sk_allocation);
+			if (!rec->zero_padding)
+				return -ENOMEM;
+
+			sg_set_buf(&rec->sg_zero_padding,
+				   rec->zero_padding,
 				   rec->zero_padding_len);
 			sg_mark_end(&rec->sg_zero_padding);
 			sg_chain(&rec->sg_content_type, 2,
 				 &rec->sg_zero_padding);
-		pr_info("Adding zero padding of %u bytes\n",
-			rec->zero_padding_len);
+
+			pr_info("B#: Adding zero padding of %u bytes\n",
+				rec->zero_padding_len);
 		} else {
 			sg_mark_end(&rec->sg_content_type);
 		}
+
 		sg_chain(msg_pl->sg.data, msg_pl->sg.end + 1,
 			 &rec->sg_content_type);
 	} else {
@@ -1114,12 +1123,7 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 					       tls_ctx->tx_record_zero_pad);
 			zero_pad_len =
 				get_random_u32_inclusive(0, max_zero_pad_len);
-			rec->zero_padding = kzalloc(zero_pad_len,
-						    sk->sk_allocation);
-			if (!rec->zero_padding)
-				rec->zero_padding_len = 0;
-			else
-				rec->zero_padding_len = zero_pad_len;
+			rec->zero_padding_len = zero_pad_len;
 		}
 
 		required_size = msg_pl->sg.size + try_to_copy +
