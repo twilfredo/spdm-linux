@@ -300,6 +300,27 @@ extra byte used by the ContentType field.
 
 [1] https://datatracker.ietf.org/doc/html/rfc8449
 
+TLS_TX_RANDOM_PAD
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Enables and sets the limit for randomized zero padding [1] of outgoing
+TLS records.
+
+When enabled, TLS records that are not already at the maximum record size will
+be padded with a randomly chosen amount of zero padding up to the the remaining
+record capacity or the limit provided (smaller of the two). Randomized zero
+padding can reduce information leakage via observable TLS record lengths and
+mitigates traffic analysis based on message size.
+
+Padding never exceeds the protocol maximum record size and
+full-sized records are unchanged.
+
+This increases bandwidth usage and may add CPU overhead due to padding
+generation and larger encryption operations. For workloads with small records,
+the bandwidth overhead may be significant.
+
+[1] https://datatracker.ietf.org/doc/html/rfc8446#section-5.4
+
 Statistics
 ==========
 
