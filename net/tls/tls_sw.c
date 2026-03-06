@@ -431,6 +431,7 @@ int tls_tx_records(struct sock *sk, int flags)
 		 */
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		kfree(rec->zero_padding);
 		kfree(rec);
 	}
 
@@ -451,6 +452,7 @@ int tls_tx_records(struct sock *sk, int flags)
 
 			list_del(&rec->list);
 			sk_msg_free(sk, &rec->msg_plaintext);
+			kfree(rec->zero_padding);
 			kfree(rec);
 		} else {
 			break;
@@ -2592,6 +2594,7 @@ void tls_sw_release_resources_tx(struct sock *sk)
 				       struct tls_rec, list);
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		kfree(rec->zero_padding);
 		kfree(rec);
 	}
 
@@ -2599,6 +2602,7 @@ void tls_sw_release_resources_tx(struct sock *sk)
 		list_del(&rec->list);
 		sk_msg_free(sk, &rec->msg_encrypted);
 		sk_msg_free(sk, &rec->msg_plaintext);
+		kfree(rec->zero_padding);
 		kfree(rec);
 	}
 
